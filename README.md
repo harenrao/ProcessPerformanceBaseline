@@ -11,7 +11,7 @@ what was wrong with v1, what changed, and the recommended roadmap.
 
 ## Quick start (no developer tools needed)
 
-You only need **Python 3.10 or newer** ([python.org](https://www.python.org/downloads/); on Windows tick "Add Python to PATH").
+You only need **Python 3.9 or newer** ([python.org](https://www.python.org/downloads/); on Windows tick "Add Python to PATH").
 
 1. Download this branch: **Code → Download ZIP** on GitHub, then unzip it.
 2. Start it:
@@ -24,7 +24,7 @@ The first start installs packages (2–3 minutes). Keep the window open while yo
 ## Run it (development)
 
 ```bash
-# backend (Python 3.11+)
+# backend (Python 3.9+)
 python -m venv .venv && . .venv/bin/activate
 pip install -r backend/requirements.txt
 cd backend && uvicorn app.main:app --reload --port 8000

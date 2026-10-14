@@ -7,7 +7,7 @@ so the API can hand results to the React charts without rendering images.
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 from scipy import stats
@@ -17,7 +17,7 @@ D2 = 1.128
 D4 = 3.267
 
 
-def _f(x: Any) -> float | None:
+def _f(x: Any) -> Optional[float]:
     """Float that is safe to put in JSON (NaN/inf become None)."""
     if x is None:
         return None
@@ -59,7 +59,7 @@ def describe(x: np.ndarray, conf: float = 0.95) -> dict:
     return out
 
 
-def median_ci(x: np.ndarray, conf: float = 0.95) -> list[float] | None:
+def median_ci(x: np.ndarray, conf: float = 0.95) -> Optional[list[float]]:
     """Distribution-free CI for the median from binomial order statistics."""
     xs = np.sort(x)
     n = len(xs)
@@ -184,7 +184,7 @@ def _choose(fits: list[dict]) -> str:
     return "Nonparametric"
 
 
-def dist_ppf(name: str, params: dict, q: float) -> float | None:
+def dist_ppf(name: str, params: dict, q: float) -> Optional[float]:
     if name == "Normal":
         return float(stats.norm.ppf(q, params["mean"], params["sd"]))
     if name == "Lognormal":
@@ -322,8 +322,8 @@ def grubbs_outliers(x: np.ndarray, alpha: float = 0.05, max_iter: int = 10) -> l
 # --------------------------------------------------------------------------- #
 # Capability against organisational spec limits / goals
 # --------------------------------------------------------------------------- #
-def capability(x: np.ndarray, sigma_within: float | None, lsl: float | None, usl: float | None,
-               dist: str | None = None, params: dict | None = None) -> dict | None:
+def capability(x: np.ndarray, sigma_within: Optional[float], lsl: Optional[float], usl: Optional[float],
+               dist: Optional[str] = None, params: Optional[dict] = None) -> Optional[dict]:
     if lsl is None and usl is None:
         return None
     x = np.asarray(x, dtype=float)
@@ -337,7 +337,7 @@ def capability(x: np.ndarray, sigma_within: float | None, lsl: float | None, usl
     out["pct_within_observed"] = float(within.mean() * 100)
 
     def idx(s: float) -> dict:
-        r: dict[str, float | None] = {}
+        r: dict[str, Optional[float]] = {}
         if s and s > 0:
             if lsl is not None and usl is not None:
                 r["p"] = (usl - lsl) / (6 * s)
@@ -362,7 +362,7 @@ def capability(x: np.ndarray, sigma_within: float | None, lsl: float | None, usl
     return out
 
 
-def _cdf(name: str, params: dict, v: float) -> float | None:
+def _cdf(name: str, params: dict, v: float) -> Optional[float]:
     if name == "Normal":
         return float(stats.norm.cdf(v, params["mean"], params["sd"]))
     if name == "Lognormal":

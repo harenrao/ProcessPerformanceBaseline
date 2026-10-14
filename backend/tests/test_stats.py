@@ -8,7 +8,10 @@ def test_ad_normal_matches_reference():
     rng = np.random.default_rng(1)
     x = rng.normal(10, 2, 60)
     a2, p = st.ad_normal(x)
-    ref = sps.anderson(x, "norm", method="interpolate")
+    try:
+        ref = sps.anderson(x, "norm", method="interpolate")
+    except TypeError:  # SciPy < 1.17 has no `method` argument
+        ref = sps.anderson(x, "norm")
     assert abs(a2 - ref.statistic) < 1e-6
     assert p > 0.05
     _, p_skew = st.ad_normal(rng.lognormal(0, 1, 60))

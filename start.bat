@@ -1,5 +1,5 @@
 @echo off
-REM One-step start for Windows. Needs Python 3.10+ only (the web UI is prebuilt).
+REM One-step start for Windows. Needs Python 3.9+ only (the web UI is prebuilt).
 cd /d "%~dp0"
 if not exist .venv (
   echo First run: creating Python environment and installing packages, 2-3 minutes...

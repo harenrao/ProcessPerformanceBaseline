@@ -5,7 +5,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, Iterator
+from typing import Any, Iterator, Optional
 
 from .config import DB_PATH
 
@@ -70,7 +70,7 @@ def init() -> None:
         con.executescript(SCHEMA)
 
 
-def row(r: sqlite3.Row | None) -> dict | None:
+def row(r: Optional[sqlite3.Row]) -> Optional[dict]:
     if r is None:
         return None
     d = dict(r)
@@ -80,7 +80,7 @@ def row(r: sqlite3.Row | None) -> dict | None:
     return d
 
 
-def one(sql: str, *args: Any) -> dict | None:
+def one(sql: str, *args: Any) -> Optional[dict]:
     with tx() as con:
         return row(con.execute(sql, args).fetchone())
 
@@ -97,6 +97,6 @@ def exec_(sql: str, *args: Any) -> int:
         return cur.lastrowid
 
 
-def audit(project_id: int | None, user: dict, action: str, detail: str = "") -> None:
+def audit(project_id: Optional[int], user: dict, action: str, detail: str = "") -> None:
     exec_("INSERT INTO audit (project_id, user_id, user_name, action, detail, at) VALUES (?,?,?,?,?,?)",
           project_id, user["id"], user["name"], action, detail, now())

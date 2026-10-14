@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
@@ -40,8 +41,8 @@ class NewUser(BaseModel):
     name: str
     role: str
     password: str
-    email: str | None = None
-    org_id: int | None = None
+    email: Optional[str] = None
+    org_id: Optional[int] = None
 
 
 @router.post("/users")

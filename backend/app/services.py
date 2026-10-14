@@ -1,6 +1,8 @@
 """Glue between stored records and the analysis engine."""
 from __future__ import annotations
 
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 from fastapi import HTTPException
@@ -11,7 +13,7 @@ from .engine import stats as st
 from .engine.ingest import quality_report
 
 
-def latest_dataset(project_id: int) -> dict | None:
+def latest_dataset(project_id: int) -> Optional[dict]:
     return db.one("SELECT * FROM datasets WHERE project_id = ? ORDER BY id DESC LIMIT 1", project_id)
 
 
@@ -52,14 +54,14 @@ def summary_of(b: dict) -> dict:
     }
 
 
-def included_values(b: dict, key: str) -> np.ndarray | None:
+def included_values(b: dict, key: str) -> Optional[np.ndarray]:
     m = next((m for m in (b.get("results") or {}).get("metrics", []) if m["key"] == key), None)
     if not m or "points" not in m:
         return None
     return np.array([p["value"] for p in m["points"] if not p["excluded"]])
 
 
-def metric_table(project: dict, baseline: dict | None) -> pd.DataFrame:
+def metric_table(project: dict, baseline: Optional[dict]) -> pd.DataFrame:
     """Row-level metric values, with a baseline's exclusions applied when one is given."""
     ds = baseline and db.one("SELECT * FROM datasets WHERE id = ?", baseline["dataset_id"]) or require_dataset(project["id"])
     metrics = baseline["metrics"] if baseline else project["metrics"]
@@ -71,7 +73,7 @@ def metric_table(project: dict, baseline: dict | None) -> pd.DataFrame:
     return t
 
 
-def stratify(project: dict, baseline: dict | None, metric: str, group: str) -> dict:
+def stratify(project: dict, baseline: Optional[dict], metric: str, group: str) -> dict:
     t = metric_table(project, baseline)
     if metric not in t:
         raise HTTPException(400, "Unknown metric")
@@ -91,7 +93,7 @@ def stratify(project: dict, baseline: dict | None, metric: str, group: str) -> d
     return res
 
 
-def fit_model(project: dict, baseline: dict | None, y: str, xs: list[str]) -> dict:
+def fit_model(project: dict, baseline: Optional[dict], y: str, xs: list[str]) -> dict:
     if not xs:
         raise HTTPException(400, "Pick at least one predictor.")
     t = metric_table(project, baseline)

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import io
 import re
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -131,7 +131,7 @@ def compute_metric(df: pd.DataFrame, md: dict) -> pd.Series:
     return s
 
 
-def quality_report(df: pd.DataFrame, mapping: dict, metrics: list[dict] | None = None) -> dict:
+def quality_report(df: pd.DataFrame, mapping: dict, metrics: Optional[list[dict]] = None) -> dict:
     issues: list[dict] = []
     cols: list[dict] = []
     mapped = [mapping.get("size")] + mapping.get("effort", []) + mapping.get("defect", [])

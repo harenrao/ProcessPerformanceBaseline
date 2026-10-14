@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -47,11 +47,11 @@ def list_projects(limit: int = 100, offset: int = 0, u: dict = Depends(current_u
 class ProjectIn(BaseModel):
     name: str
     client: str
-    org_id: int | None = None
-    description: str | None = None
-    lifecycle: str | None = "Development"
-    size_unit: str | None = "FP"
-    period: str | None = None
+    org_id: Optional[int] = None
+    description: Optional[str] = None
+    lifecycle: Optional[str] = "Development"
+    size_unit: Optional[str] = "FP"
+    period: Optional[str] = None
     use_sample: bool = False
 
 
@@ -87,11 +87,11 @@ def get_project(pid: int, u: dict = Depends(current_user)):
 
 
 class ProjectPatch(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    lifecycle: str | None = None
-    size_unit: str | None = None
-    period: str | None = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    lifecycle: Optional[str] = None
+    size_unit: Optional[str] = None
+    period: Optional[str] = None
 
 
 @router.patch("/{pid}")
@@ -206,7 +206,7 @@ def put_metrics(pid: int, body: MetricsIn, u: dict = Depends(require_gt)):
 
 
 # ---------------------------------------------------------------- analysis ---
-def _baseline_or_none(pid: int, bid: int | None) -> dict | None:
+def _baseline_or_none(pid: int, bid: Optional[int]) -> Optional[dict]:
     if not bid:
         return None
     b = db.one("SELECT * FROM baselines WHERE id = ? AND project_id = ?", bid, pid)
@@ -218,7 +218,7 @@ def _baseline_or_none(pid: int, bid: int | None) -> dict | None:
 class StratIn(BaseModel):
     metric: str
     group: str
-    baseline_id: int | None = None
+    baseline_id: Optional[int] = None
 
 
 @router.post("/{pid}/stratify")
@@ -247,8 +247,8 @@ def variables(pid: int, u: dict = Depends(current_user)):
 class ModelIn(BaseModel):
     y: str
     xs: list[str]
-    baseline_id: int | None = None
-    name: str | None = None
+    baseline_id: Optional[int] = None
+    name: Optional[str] = None
 
 
 def _public_model(m: dict) -> dict:

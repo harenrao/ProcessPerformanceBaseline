@@ -5,7 +5,7 @@ exclusions  ->  per-metric process performance baseline.
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -203,8 +203,8 @@ def analyse_metric(frame: pd.DataFrame, ids: list[str], md: dict, settings: dict
     return out
 
 
-def run_baseline(df: pd.DataFrame, mapping: dict, metrics: list[dict], settings: dict | None,
-                 exclusions: dict | None) -> dict:
+def run_baseline(df: pd.DataFrame, mapping: dict, metrics: list[dict], settings: Optional[dict],
+                 exclusions: Optional[dict]) -> dict:
     s = {**DEFAULT_SETTINGS, **(settings or {})}
     exclusions = exclusions or {}
     frame = ordered_frame(df, mapping)

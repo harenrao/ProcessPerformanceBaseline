@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-step start for macOS / Linux. Needs Python 3.10+ only (the web UI is prebuilt).
+# One-step start for macOS / Linux. Needs Python 3.9+ only (the web UI is prebuilt).
 set -e
 cd "$(dirname "$0")"
 if [ ! -d .venv ]; then

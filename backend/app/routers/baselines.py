@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -43,9 +43,9 @@ def defaults(_: dict = Depends(current_user)):
 
 
 class NewBaseline(BaseModel):
-    label: str | None = None
-    settings: dict[str, Any] | None = None
-    carry_exclusions_from: int | None = None
+    label: Optional[str] = None
+    settings: Optional[dict[str, Any]] = None
+    carry_exclusions_from: Optional[int] = None
 
 
 @router.post("/projects/{pid}/baselines")
@@ -80,7 +80,7 @@ def get(bid: int, u: dict = Depends(current_user)):
 class ExclusionIn(BaseModel):
     metric: str
     row: int
-    reason: str | None = None  # None/empty re-includes the point
+    reason: Optional[str] = None  # None/empty re-includes the point
 
 
 @router.patch("/baselines/{bid}/exclusions")
@@ -105,7 +105,7 @@ def exclude(bid: int, body: ExclusionIn, u: dict = Depends(require_gt)):
 
 class SettingsIn(BaseModel):
     settings: dict[str, Any]
-    label: str | None = None
+    label: Optional[str] = None
 
 
 @router.patch("/baselines/{bid}/settings")
@@ -133,7 +133,7 @@ def refresh_metrics(bid: int, u: dict = Depends(require_gt)):
 
 
 class ReviewIn(BaseModel):
-    note: str | None = None
+    note: Optional[str] = None
 
 
 @router.post("/baselines/{bid}/submit")
