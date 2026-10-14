@@ -1,6 +1,14 @@
 """
-Baseline orchestration: dataset + metric definitions + settings + justified
-exclusions  ->  per-metric process performance baseline.
+Baseline orchestration. For every metric:
+
+  1. dot plot of all points
+  2. box plot -> remove outliers -> rebuild, repeated until clean
+     (capped at max_auto_exclude_pct of the points)
+  3. I-MR chart on the cleaned data (signals are flagged, not removed)
+  4. basic statistics, histogram and distribution fit
+  5. outlier list
+
+Users can override a point: "keep" an auto-removed point, or "exclude" one by hand.
 """
 from __future__ import annotations
 
@@ -14,9 +22,7 @@ from . import stats as st
 from .ingest import compute_metric
 
 DEFAULT_SETTINGS: dict[str, Any] = {
-    "outlier_method": "iqr",      # iqr | grubbs | imr | none  (flags only)
-    "auto_exclude": False,        # exclude flagged points automatically (capped, logged)
-    "max_auto_exclude_pct": 10,
+    "max_auto_exclude_pct": 10,   # box-plot removal stops once this share of points is removed
     "transform": "auto",          # auto: chart lognormal data on the log scale
     "rules": [1, 2, 3, 5, 6],
     "confidence": 0.95,
@@ -42,22 +48,64 @@ def point_ids(df: pd.DataFrame, mapping: dict) -> list[str]:
     return [f"Row {int(r) + 1}" for r in df["__row"]]
 
 
-def _flags(values: np.ndarray, method: str, rules: list[int]) -> dict[int, list[str]]:
-    """index -> list of tests that flagged the point."""
-    res: dict[int, list[str]] = {}
-    if len(values) < 4:
-        return res
-    if method in ("iqr", "all"):
-        for i in st.iqr_outliers(values):
-            res.setdefault(i, []).append("IQR")
-    if method in ("grubbs", "all"):
-        for i in st.grubbs_outliers(values):
-            res.setdefault(i, []).append("Grubbs")
-    if method in ("imr", "all"):
-        ch = st.imr(values, rules=(1,))
-        for i in ch["violations"]:
-            res.setdefault(i, []).append("I-MR 3σ")
-    return res
+def _override(v: Any) -> tuple[str, str]:
+    """Stored per point: a plain string (legacy manual exclusion) or {"action", "reason"}."""
+    if isinstance(v, dict):
+        return v.get("action", "exclude"), v.get("reason", "")
+    return "exclude", str(v)
+
+
+def box_stats(x: np.ndarray) -> dict:
+    """Box plot as Minitab draws it: quartiles, 1.5×IQR fences, whiskers to the last point inside."""
+    q1, med, q3 = (float(v) for v in np.percentile(x, [25, 50, 75]))
+    iqr = q3 - q1
+    lo_f, hi_f = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+    inside = x[(x >= lo_f) & (x <= hi_f)]
+    return {"q1": q1, "median": med, "q3": q3, "iqr": iqr, "lower_fence": lo_f, "upper_fence": hi_f,
+            "whisker_low": float(inside.min()) if len(inside) else q1,
+            "whisker_high": float(inside.max()) if len(inside) else q3,
+            "min": float(x.min()), "max": float(x.max()), "mean": float(x.mean())}
+
+
+def iterative_box(points: list[dict], active: list[int], keep: set[int], cap: int) -> tuple[list[dict], list[str]]:
+    """Box plot, remove outliers, rebuild; repeat until clean or the cap is reached."""
+    iterations: list[dict] = []
+    warnings: list[str] = []
+    removed = 0
+    it = 1
+    while len(active) >= 4 and it <= 25:
+        vals = np.array([points[i]["value"] for i in active])
+        b = box_stats(vals)
+        outl = [i for i in active if points[i]["value"] < b["lower_fence"] or points[i]["value"] > b["upper_fence"]]
+        to_remove = [i for i in outl if i not in keep]
+        kept = [i for i in outl if i in keep]
+        room = cap - removed
+        capped = []
+        if len(to_remove) > room:
+            to_remove.sort(key=lambda i: -abs(points[i]["value"] - b["median"]))
+            capped = to_remove[max(room, 0):]
+            to_remove = to_remove[:max(room, 0)]
+        rec = {"iteration": it, "n": len(active), "box": b,
+               "values": [points[i]["value"] for i in active],
+               "removed": [{"row": points[i]["row"], "id": points[i]["id"], "value": points[i]["value"]} for i in to_remove],
+               "kept": [{"row": points[i]["row"], "id": points[i]["id"], "value": points[i]["value"],
+                         "why": "kept by user"} for i in kept] +
+                       [{"row": points[i]["row"], "id": points[i]["id"], "value": points[i]["value"],
+                         "why": "10% removal limit reached"} for i in capped]}
+        iterations.append(rec)
+        if capped and not warnings:
+            warnings.append(f"Box-plot removal stopped at the 10% limit ({cap} point(s)); "
+                            f"{len(capped)} outlier(s) were kept. The data may need stratifying.")
+        if not to_remove:
+            break
+        for i in to_remove:
+            points[i].update(excluded=True, removed_by="box", removed_in=it,
+                             reason=f"Box plot outlier (iteration {it}), beyond 1.5×IQR fence")
+        rm = set(to_remove)
+        active = [i for i in active if i not in rm]
+        removed += len(to_remove)
+        it += 1
+    return iterations, warnings
 
 
 def _histogram(x: np.ndarray, fit: dict) -> dict:
@@ -94,25 +142,23 @@ def analyse_metric(frame: pd.DataFrame, ids: list[str], md: dict, settings: dict
         return {"key": md["key"], "name": md["name"], "error": "No usable data points.", "n_total": 0}
 
     allv = np.array([p["value"] for p in points])
-    flags = _flags(allv, settings["outlier_method"], settings["rules"])
-    for i, f in flags.items():
-        points[i]["flags"] = f
+    keep: set[int] = set()
+    for i, p in enumerate(points):
+        p.update(removed_by=None, removed_in=None, kept_reason=None)
+        ov = exclusions.get(str(p["row"]))
+        if ov is None:
+            continue
+        action, reason = _override(ov)
+        if action == "keep":
+            keep.add(i)
+            p["kept_reason"] = reason
+        else:
+            p.update(excluded=True, removed_by="manual", reason=reason)
 
-    for p in points:
-        reason = exclusions.get(str(p["row"]))
-        if reason:
-            p["excluded"], p["reason"] = True, reason
-
-    if settings.get("auto_exclude") and flags:
-        cap = int(len(points) * settings.get("max_auto_exclude_pct", 10) / 100)
-        med = np.median(allv)
-        cand = sorted((i for i in flags if not points[i]["excluded"]), key=lambda i: -abs(allv[i] - med))
-        for i in cand[:cap]:
-            points[i]["excluded"] = True
-            points[i]["reason"] = f"Auto-excluded ({', '.join(points[i]['flags'])}); assignable cause not yet recorded"
-        if len(cand) > cap:
-            warnings.append(f"{len(cand) - cap} flagged point(s) kept: auto-exclusion is capped at "
-                            f"{settings.get('max_auto_exclude_pct', 10)}% of the data.")
+    active = [i for i, p in enumerate(points) if not p["excluded"]]
+    cap = int(len(points) * settings.get("max_auto_exclude_pct", 10) / 100)
+    box_iterations, box_warn = iterative_box(points, active, keep, cap)
+    warnings += box_warn
 
     inc_idx = [i for i, p in enumerate(points) if not p["excluded"]]
     x = allv[inc_idx]
@@ -120,10 +166,13 @@ def analyse_metric(frame: pd.DataFrame, ids: list[str], md: dict, settings: dict
     out: dict[str, Any] = {
         "key": md["key"], "name": md["name"], "family": md.get("family"), "unit": md.get("unit"),
         "direction": md.get("direction"), "n_total": len(points), "n_used": n,
-        "n_excluded": len(points) - n, "n_flagged": len(flags),
+        "n_excluded": len(points) - n,
+        "n_box_removed": sum(p["removed_by"] == "box" for p in points),
+        "n_manual_removed": sum(p["removed_by"] == "manual" for p in points),
     }
     if n < 5:
-        out.update({"points": points, "error": f"Only {n} points after exclusions; at least 5 needed.", "rag": "red"})
+        out.update({"points": points, "box_iterations": box_iterations,
+                    "error": f"Only {n} points after outlier removal; at least 5 needed.", "rag": "red"})
         return out
 
     desc = st.describe(x, settings["confidence"])
@@ -184,7 +233,8 @@ def analyse_metric(frame: pd.DataFrame, ids: list[str], md: dict, settings: dict
     else:
         rag = "green"
     if rule1:
-        warnings.append(f"{rule1} included point(s) beyond the 3σ limits: investigate for assignable cause.")
+        warnings.append(f"{rule1} point(s) beyond the I-MR 3σ limits after outlier removal: "
+                        "investigate for an assignable cause.")
     if other:
         warnings.append(f"{other} point(s) break run rules: the process may have shifted or be mixed.")
     if n < settings.get("min_points", 20):
@@ -194,8 +244,12 @@ def analyse_metric(frame: pd.DataFrame, ids: list[str], md: dict, settings: dict
         better = desc["mean"] <= g if md.get("direction") == "lower" else desc["mean"] >= g
         out["goal_met"] = bool(better)
 
+    out["n_flagged"] = len(viol_points)
+    normal_fit = next(f for f in fit["fits"] if f["name"] == "Normal")
+    desc["normality_ad"] = normal_fit["ad"]
+    desc["normality_p"] = normal_fit["p"]
     out.update({
-        "points": points, "stats": desc, "fit": fit, "chart": chart, "baseline": bl,
+        "points": points, "box_iterations": box_iterations, "stats": desc, "fit": fit, "chart": chart, "baseline": bl,
         "capability": cap, "histogram": _histogram(x, fit),
         "status": {"stable": stable, "normal": normal, "rule1": rule1, "run_rules": other},
         "rag": rag, "warnings": warnings, "goal": md.get("goal"), "lsl": md.get("lsl"), "usl": md.get("usl"),

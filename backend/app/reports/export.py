@@ -1,12 +1,17 @@
 """
 Excel / Word / PowerPoint exports in GT house style.
 
+Every metric follows the same sequence as the app: dot plot, box plot iterations,
+I-MR chart, basic statistics, histogram, outlier list.
+
 Charts are drawn with matplotlib using the same tokens as the web app so the
 documents read as the same product.
 """
 from __future__ import annotations
 
 import io
+
+import numpy as np
 from datetime import datetime
 
 import matplotlib
@@ -127,6 +132,121 @@ def _png(fig) -> bytes:
 
 
 # ------------------------------------------------------------------- excel --
+RED = "#BC3A2E"
+AMBER = "#B7830B"
+GREY = "#B4B2BC"
+STEPS = ["Dot plot", "Box plot", "I-MR chart", "Basic statistics", "Histogram", "Outlier list"]
+RULE_TEXT = {1: "beyond 3σ", 2: "9 in a row on one side", 3: "6 in a row trending",
+             5: "2 of 3 beyond 2σ", 6: "4 of 5 beyond 1σ"}
+
+
+# ------------------------------------------------------------- content ----
+def outliers_of(m: dict) -> list[dict]:
+    """Removed points in removal order: box-plot iterations first, then manual."""
+    pts = [p for p in m.get("points", []) if p.get("excluded")]
+    pts.sort(key=lambda p: (p.get("removed_by") != "box", p.get("removed_in") or 0, p["row"]))
+    return [{"id": p["id"], "value": p["value"],
+             "step": f"Box plot, iteration {p['removed_in']}" if p.get("removed_by") == "box" else "Removed by user",
+             "reason": p.get("reason") or ""} for p in pts]
+
+
+def kept_outliers_of(m: dict) -> list[dict]:
+    seen, out = set(), []
+    for it in m.get("box_iterations", []):
+        for k in it["kept"]:
+            if k["row"] not in seen:
+                seen.add(k["row"])
+                out.append(k)
+    return out
+
+
+def signals_of(m: dict) -> list[dict]:
+    return [{"id": p["id"], "value": p["value"], "tests": ", ".join(f"Test {r} ({RULE_TEXT.get(r, '')})" for r in p["rules"])}
+            for p in m.get("points", []) if p.get("rules") and not p.get("excluded")]
+
+
+def stats_rows(m: dict) -> list[tuple[str, str]]:
+    s, bl = m["stats"], m["baseline"]
+    ci = s.get("mean_ci")
+    p = s.get("normality_p")
+    return [
+        ("Data points (n)", f"{m['n_used']} used of {m['n_total']}"),
+        ("Mean", fmt(s["mean"])), ("Median", fmt(s["median"])), ("Standard deviation", fmt(s["sd"])),
+        ("Minimum", fmt(s["min"])), ("Maximum", fmt(s["max"])),
+        ("Q1 (25th percentile)", fmt(s["p25"])), ("Q3 (75th percentile)", fmt(s["p75"])),
+        ("95% CI of mean", f"{fmt(ci[0])} – {fmt(ci[1])}" if ci else "—"),
+        ("Normality (Anderson-Darling)", "—" if p is None else f"AD {fmt(s.get('normality_ad'), 3)}, p {'< 0.005' if p < 0.005 else f'{p:.3f}'}"
+         + (" · normal" if p is not None and p >= 0.05 else " · not normal")),
+        ("Best-fit distribution", m["fit"]["best"]),
+        ("Baseline LCL", fmt(bl["lcl"])), ("Baseline CL", fmt(bl["cl"])), ("Baseline UCL", fmt(bl["ucl"])),
+        ("Limit method", bl["method"]),
+        ("Status", f"{RAG_TEXT.get(m['rag'], m['rag'])} · {'stable' if m['status']['stable'] else 'signals present'}"),
+    ]
+
+
+# -------------------------------------------------------------- charts ----
+def dotplot_png(m: dict, w: float = 8, h: float = 3.2) -> bytes:
+    """Stacked dot plot of all points; removed points marked."""
+    pts = m["points"]
+    vals = np.array([p["value"] for p in pts])
+    nb = min(40, max(12, len(vals)))
+    lo, hi = vals.min(), vals.max()
+    width = (hi - lo) / nb or 1.0
+    stacks: dict[int, int] = {}
+    fig, ax = plt.subplots(figsize=(w, h))
+    groups = {"inc": ([], []), "box": ([], []), "manual": ([], [])}
+    for p in sorted(pts, key=lambda p: p["value"]):
+        b = int((p["value"] - lo) / width) if width else 0
+        stacks[b] = stacks.get(b, 0) + 1
+        key = "inc" if not p.get("excluded") else ("box" if p.get("removed_by") == "box" else "manual")
+        groups[key][0].append(lo + (b + 0.5) * width)
+        groups[key][1].append(stacks[b])
+    ax.scatter(*groups["inc"], s=34, color=SERIES, label="Kept", zorder=3)
+    if groups["box"][0]:
+        ax.scatter(*groups["box"], s=40, color=RED, label="Removed (box plot)", zorder=3)
+    if groups["manual"][0]:
+        ax.scatter(*groups["manual"], s=40, facecolor="white", edgecolor=GREY, linewidth=1.5, label="Removed (by user)", zorder=3)
+    ax.set_yticks([])
+    ax.spines["left"].set_visible(False)
+    ax.set_ylim(0, max(stacks.values()) + 1.5)
+    ax.set_xlabel(m.get("unit") or "")
+    ax.set_title(f"Dot plot · all {len(pts)} points", loc="left")
+    ax.legend(loc="upper right", frameon=False, fontsize=8)
+    ax.grid(axis="y", visible=False)
+    fig.tight_layout()
+    return _png(fig)
+
+
+def boxplots_png(m: dict, w: float = 8) -> bytes:
+    """One horizontal box plot per iteration, top to bottom."""
+    its = m["box_iterations"]
+    allv = [p["value"] for p in m["points"]]
+    lo, hi = min(allv), max(allv)
+    pad = (hi - lo) * 0.04 or 1
+    fig, axes = plt.subplots(len(its), 1, figsize=(w, 0.4 + 1.25 * len(its)), sharex=True, squeeze=False)
+    for ax, it in zip(axes[:, 0], its):
+        v = np.array(it["values"])
+        ax.boxplot(v, vert=False, widths=0.5, whis=1.5, patch_artist=True, showfliers=False,
+                   boxprops={"facecolor": "#EEF2FB", "edgecolor": SERIES}, medianprops={"color": SERIES, "linewidth": 2},
+                   whiskerprops={"color": "#" + MUTED}, capprops={"color": "#" + MUTED})
+        rem = [r["value"] for r in it["removed"]]
+        kept = [k["value"] for k in it["kept"]]
+        if rem:
+            ax.scatter(rem, [1] * len(rem), color=RED, s=36, zorder=3)
+        if kept:
+            ax.scatter(kept, [1] * len(kept), color=AMBER, s=36, marker="D", zorder=3)
+        ax.set_yticks([])
+        ax.grid(axis="y", visible=False)
+        status = (f"{len(rem)} outlier(s) removed" + (f", {len(kept)} kept" if kept else "") if rem else
+                  f"final · {len(kept)} outlier(s) kept" if kept else "no outliers — clean")
+        ax.set_title(f"Iteration {it['iteration']} · n = {it['n']} · {status}", loc="left", fontsize=9)
+        ax.set_xlim(lo - pad, hi + pad)
+    axes[-1, 0].set_xlabel(m.get("unit") or "")
+    fig.tight_layout()
+    return _png(fig)
+
+
+# --------------------------------------------------------------- excel ----
 def build_xlsx(b: dict) -> bytes:
     wb = Workbook()
     head = Font(bold=True, color="FFFFFF", size=10)
@@ -134,85 +254,93 @@ def build_xlsx(b: dict) -> bytes:
     thin = Border(bottom=Side(style="thin", color=LINE))
     res = b["results"]
 
+    def table(ws, cols, widths):
+        ws.append(cols)
+        for c in ws[ws.max_row]:
+            c.font, c.fill = head, headfill
+        _widths(ws, widths)
+        ws.freeze_panes = ws.cell(ws.max_row + 1, 1).coordinate
+
     ws = wb.active
-    ws.title = "Baseline"
+    ws.title = "Summary"
     ws["A1"] = f"Process Performance Baseline — {b['name']}"
     ws["A1"].font = Font(bold=True, size=14, color=BRAND)
     ws["A2"] = f"Source {b['filename']} · {b['n_rows']} rows · generated {datetime.now():%d %b %Y}"
     ws["A2"].font = Font(color=MUTED)
-    cols = ["Metric", "Unit", "n", "Excluded", "Mean", "Median", "Std dev", "LCL", "CL", "UCL", "Limit method",
-            "Best fit", "AD p-value", "Stable", "RAG", "Mean 95% CI", "Goal", "Cpk/Ppk"]
     ws.append([])
-    ws.append(cols)
-    for c in ws[4]:
-        c.font, c.fill = head, headfill
+    table(ws, ["Metric", "Unit", "n used", "Removed", "Mean", "Median", "Std dev", "LCL", "CL", "UCL",
+               "Limit method", "Best fit", "Stable", "Status"], [38, 12, 8, 9, 10, 10, 10, 10, 10, 10, 34, 13, 8, 9])
     for m in res["metrics"]:
         if "stats" not in m:
             ws.append([m["name"], m.get("unit"), m.get("n_used"), m.get("n_excluded"), m.get("error")])
             continue
-        s, bl, fit = m["stats"], m["baseline"], m["fit"]
-        bf = next((f for f in fit["fits"] if f["name"] == fit["best"]), {})
-        cap = m.get("capability") or {}
-        ci = s.get("mean_ci")
+        s, bl = m["stats"], m["baseline"]
         ws.append([m["name"], m.get("unit"), m["n_used"], m["n_excluded"], s["mean"], s["median"], s["sd"],
-                   bl["lcl"], bl["cl"], bl["ucl"], bl["method"], fit["best"], bf.get("p_label", "—"),
-                   "Yes" if m["status"]["stable"] else "No", RAG_TEXT.get(m["rag"], m["rag"]),
-                   f"{fmt(ci[0])} – {fmt(ci[1])}" if ci else "—", m.get("goal"),
-                   fmt(cap.get("cpk") or cap.get("ppk")) if cap else "—"])
-        rag = ws.cell(ws.max_row, 15)
+                   bl["lcl"], bl["cl"], bl["ucl"], bl["method"], m["fit"]["best"],
+                   "Yes" if m["status"]["stable"] else "No", RAG_TEXT.get(m["rag"], m["rag"])])
+        c = ws.cell(ws.max_row, 14)
         fg, bg = RAG.get(m["rag"], RAG["grey"])
-        rag.fill, rag.font = PatternFill("solid", fgColor=bg), Font(color=fg, bold=True)
-    for row in ws.iter_rows(min_row=5, max_row=ws.max_row):
-        for c in row:
-            c.border = thin
-            if isinstance(c.value, float):
-                c.number_format = "0.0000"
-    _widths(ws, [38, 12, 6, 9, 10, 10, 10, 10, 10, 10, 34, 13, 11, 8, 8, 22, 8, 9])
-    ws.freeze_panes = "B5"
+        c.fill, c.font = PatternFill("solid", fgColor=bg), Font(color=fg, bold=True)
 
-    ws2 = wb.create_sheet("Data points")
-    ws2.append(["Metric", "Row", "ID", "Value", "Included", "Flagged by", "Run rules", "Exclusion reason"])
-    for c in ws2[1]:
-        c.font, c.fill = head, headfill
+    ws = wb.create_sheet("Box plot iterations")
+    table(ws, ["Metric", "Iteration", "n", "Q1", "Median", "Q3", "Lower fence", "Upper fence", "Removed", "Removed IDs"],
+          [38, 9, 6, 10, 10, 10, 12, 12, 9, 50])
     for m in res["metrics"]:
-        for pt in m.get("points", []):
-            ws2.append([m["name"], pt["row"] + 1, pt["id"], pt["value"], "No" if pt["excluded"] else "Yes",
-                        ", ".join(pt.get("flags") or []), ", ".join(str(r) for r in pt.get("rules") or []),
-                        pt.get("reason") or ""])
-    _widths(ws2, [38, 6, 16, 12, 9, 16, 10, 60])
-    ws2.freeze_panes = "A2"
+        for it in m.get("box_iterations", []):
+            bx = it["box"]
+            ws.append([m["name"], it["iteration"], it["n"], bx["q1"], bx["median"], bx["q3"], bx["lower_fence"],
+                       bx["upper_fence"], len(it["removed"]), ", ".join(r["id"] for r in it["removed"])])
 
-    ws3 = wb.create_sheet("Distribution fits")
-    ws3.append(["Metric", "Distribution", "AD statistic", "p-value", "Selected"])
-    for c in ws3[1]:
-        c.font, c.fill = head, headfill
+    ws = wb.create_sheet("Basic statistics")
+    labels = None
     for m in _ok(res["metrics"]):
-        for f in m["fit"]["fits"]:
-            ws3.append([m["name"], f["name"], f["ad"], f["p_label"], "✓" if f["name"] == m["fit"]["best"] else ""])
-    _widths(ws3, [38, 14, 13, 10, 9])
+        rows = stats_rows(m)
+        if labels is None:
+            labels = [k for k, _ in rows]
+            table(ws, ["Metric"] + labels, [38] + [16] * len(labels))
+        ws.append([m["name"]] + [v for _, v in rows])
 
-    ws4 = wb.create_sheet("Method")
-    st = b["settings"]
-    lines = [
-        ("Outlier screening", f"{st['outlier_method'].upper()} (flags only)" + (", auto-exclusion capped at "
-                                                                                 f"{st['max_auto_exclude_pct']}%" if st["auto_exclude"] else "")),
-        ("Run rules", ", ".join(str(r) for r in st["rules"]) + " (Minitab numbering)"),
-        ("Transform", "Lognormal data charted on log scale" if st["transform"] == "auto" else "None"),
-        ("Normality test", "Anderson-Darling; p-value per Minitab (D'Agostino & Stephens)"),
-        ("Limits", "Normal: I-MR natural limits. Other fits: 0.135/50/99.865 percentiles. No fit: empirical percentiles."),
-        ("Exclusions", "Only with a recorded assignable cause; see 'Data points'."),
-    ]
-    for k, v in lines:
-        ws4.append([k, v])
-        ws4.cell(ws4.max_row, 1).font = Font(bold=True)
-    _widths(ws4, [22, 100])
-    for row in ws4.iter_rows():
-        for c in row:
-            c.alignment = Alignment(wrap_text=True, vertical="top")
+    ws = wb.create_sheet("Outlier list")
+    table(ws, ["Metric", "ID", "Value", "Step", "Reason"], [38, 16, 12, 22, 70])
+    for m in res["metrics"]:
+        for o in outliers_of(m):
+            ws.append([m["name"], o["id"], o["value"], o["step"], o["reason"]])
 
+    ws = wb.create_sheet("Data points")
+    table(ws, ["Metric", "Row", "ID", "Value", "Used", "Removed at", "I-MR signals"], [38, 6, 16, 12, 7, 22, 16])
+    for m in res["metrics"]:
+        for p in m.get("points", []):
+            ws.append([m["name"], p["row"] + 1, p["id"], p["value"], "No" if p["excluded"] else "Yes",
+                       (f"Box iteration {p['removed_in']}" if p.get("removed_by") == "box" else
+                        "By user" if p.get("removed_by") == "manual" else ""),
+                       ", ".join(str(r) for r in p.get("rules") or [])])
+
+    ws = wb.create_sheet("Method")
+    for k, v in METHOD:
+        ws.append([k, v])
+        ws.cell(ws.max_row, 1).font = Font(bold=True)
+    _widths(ws, [22, 110])
+    for sh in wb.worksheets:
+        for row in sh.iter_rows(min_row=2):
+            for c in row:
+                if isinstance(c.value, float):
+                    c.number_format = "0.0000"
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+METHOD = [
+    ("1. Dot plot", "All data points for the metric, to show spread and extreme values."),
+    ("2. Box plot", f"Points beyond 1.5×IQR from the quartiles are removed and the box plot is rebuilt, repeatedly, "
+                    f"until no outliers remain or 10% of the points have been removed."),
+    ("3. I-MR chart", "Built on the cleaned data, in time order. Points that break the stability tests "
+                      "(1, 2, 3, 5, 6) are flagged for investigation, not removed."),
+    ("4. Basic statistics", "Descriptive statistics, Anderson-Darling normality test and baseline limits "
+                            "(I-MR natural limits for normal data; fitted-distribution percentiles otherwise)."),
+    ("5. Histogram", "Distribution of the cleaned data with the best-fitting distribution."),
+    ("6. Outlier list", "Every removed point, the step that removed it and the reason."),
+]
 
 
 def _widths(ws, ws_widths: list[int]) -> None:
@@ -220,7 +348,7 @@ def _widths(ws, ws_widths: list[int]) -> None:
         ws.column_dimensions[get_column_letter(i)].width = w
 
 
-# -------------------------------------------------------------------- word --
+# ---------------------------------------------------------------- word ----
 def _shade(cell, hex_color: str) -> None:
     tcPr = cell._tc.get_or_add_tcPr()
     shd = OxmlElement("w:shd")
@@ -228,6 +356,26 @@ def _shade(cell, hex_color: str) -> None:
     shd.set(qn("w:color"), "auto")
     shd.set(qn("w:fill"), hex_color)
     tcPr.append(shd)
+
+
+def _doc_table(doc, header: list[str], rows: list[list[str]], widths: list[float]):
+    t = doc.add_table(rows=1, cols=len(header))
+    t.style = "Table Grid"
+    for i, h in enumerate(header):
+        c = t.rows[0].cells[i]
+        c.text = h
+        r = c.paragraphs[0].runs[0]
+        r.font.bold, r.font.size, r.font.color.rgb = True, Pt(9), RGBColor(255, 255, 255)
+        _shade(c, BRAND)
+    for row in rows:
+        cells = t.add_row().cells
+        for i, v in enumerate(row):
+            cells[i].text = str(v)
+            cells[i].paragraphs[0].runs[0].font.size = Pt(9)
+    for r in t.rows:
+        for i, w in enumerate(widths):
+            r.cells[i].width = Inches(w)
+    return t
 
 
 def build_docx(b: dict) -> bytes:
@@ -246,83 +394,57 @@ def build_docx(b: dict) -> bytes:
     meta.add_run(f"Source data: {b['filename']} ({b['n_rows']} rows)\n").bold = True
     meta.add_run(f"Prepared by {b.get('created_by_name') or '—'}. Generated {datetime.now():%d %B %Y}.")
 
-    doc.add_heading("Executive summary", 1)
-    s = res["summary"]
-    doc.add_paragraph(
-        f"{s['metrics']} metrics were baselined from {s['rows']} data points. {s['green']} are green "
-        f"(stable, sufficient data, distribution identified), {s['amber']} amber and {s['red']} red. "
-        f"{s['excluded']} point(s) were excluded with a recorded assignable cause; {s['flagged']} were flagged "
-        f"by outlier screening for review.")
-
     doc.add_heading("Baseline summary", 1)
-    cols = ["Metric", "n", "Mean", "Median", "LCL", "CL", "UCL", "Fit", "RAG"]
-    tbl = doc.add_table(rows=1, cols=len(cols))
-    tbl.style = "Table Grid"
-    for i, c in enumerate(cols):
-        cell = tbl.rows[0].cells[i]
-        cell.text = c
-        cell.paragraphs[0].runs[0].font.bold = True
-        cell.paragraphs[0].runs[0].font.color.rgb = RGBColor(255, 255, 255)
-        _shade(cell, BRAND)
-    for m in _ok(res["metrics"]):
-        bl = m["baseline"]
-        vals = [m["name"], str(m["n_used"]), fmt(m["stats"]["mean"]), fmt(m["stats"]["median"]), fmt(bl["lcl"]),
-                fmt(bl["cl"]), fmt(bl["ucl"]), m["fit"]["best"], RAG_TEXT[m["rag"]]]
-        cells = tbl.add_row().cells
-        for i, v in enumerate(vals):
-            cells[i].text = v
-            cells[i].paragraphs[0].runs[0].font.size = Pt(8.5)
-        _shade(cells[-1], RAG[m["rag"]][1])
-    for r in tbl.rows:
-        for i, w in enumerate([2.1, 0.4, 0.6, 0.6, 0.6, 0.6, 0.6, 0.9, 0.6]):
-            r.cells[i].width = Inches(w)
-
+    ok = _ok(res["metrics"])
+    _doc_table(doc, ["Metric", "n", "LCL", "CL", "UCL", "Fit", "Status"],
+               [[m["name"], str(m["n_used"]), fmt(m["baseline"]["lcl"]), fmt(m["baseline"]["cl"]),
+                 fmt(m["baseline"]["ucl"]), m["fit"]["best"], RAG_TEXT[m["rag"]]] for m in ok],
+               [2.4, 0.5, 0.7, 0.7, 0.7, 1.0, 0.7])
     doc.add_heading("Method", 1)
-    stt = b["settings"]
-    for line in [
-        f"Outlier screening: {stt['outlier_method'].upper()}. Flagged points are reviewed; a point is excluded only "
-        "when an assignable cause is recorded.",
-        "Stability: I-MR chart with Western Electric / Nelson tests " + ", ".join(map(str, stt["rules"])) +
-        ". Lognormal metrics are charted on the log scale.",
-        "Distribution: Anderson-Darling goodness of fit across Normal, Lognormal, Exponential, Weibull and Gamma.",
-        "Limits: Normal → I-MR natural process limits; other fits → 0.135 / 50 / 99.865 percentiles of the fitted "
-        "distribution; no fit → empirical percentiles.",
-    ]:
-        doc.add_paragraph(line, style="List Bullet")
+    for k, v in METHOD:
+        para = doc.add_paragraph(style="List Bullet")
+        para.add_run(k[3:] + ": ").bold = True
+        para.add_run(v)
 
-    for m in _ok(res["metrics"]):
+    for m in ok:
         doc.add_page_break()
         doc.add_heading(m["name"], 1)
-        ss, bl = m["stats"], m["baseline"]
-        doc.add_paragraph(f"Unit {m.get('unit') or '—'} · n = {m['n_used']} ({m['n_excluded']} excluded) · "
-                          f"best fit {m['fit']['best']} · {bl['method']} · RAG {RAG_TEXT[m['rag']]}")
+        doc.add_paragraph(f"{m.get('unit') or ''} · n = {m['n_used']} of {m['n_total']} · "
+                          f"{m['n_box_removed']} removed by box plot, {m['n_manual_removed']} by user · "
+                          f"status {RAG_TEXT[m['rag']]}")
+        doc.add_heading("1. Dot plot", 2)
+        doc.add_picture(io.BytesIO(dotplot_png(m)), width=Inches(6.3))
+        doc.add_heading("2. Box plot", 2)
+        doc.add_picture(io.BytesIO(boxplots_png(m)), width=Inches(6.3))
+        doc.add_heading("3. I-MR chart (after outlier removal)", 2)
         doc.add_picture(io.BytesIO(control_chart_png(m)), width=Inches(6.3))
-        doc.add_picture(io.BytesIO(histogram_png(m)), width=Inches(4.2))
-        tb = doc.add_table(rows=0, cols=4)
-        tb.style = "Table Grid"
-        pairs = [("Mean", fmt(ss["mean"])), ("Median", fmt(ss["median"])), ("Std dev", fmt(ss["sd"])),
-                 ("CV", fmt(ss.get("cv"))), ("LCL", fmt(bl["lcl"])), ("CL", fmt(bl["cl"])), ("UCL", fmt(bl["ucl"])),
-                 ("P10–P90", f"{fmt(ss['p10'])} – {fmt(ss['p90'])}")]
-        for i in range(0, len(pairs), 2):
-            c = tb.add_row().cells
-            c[0].text, c[1].text, c[2].text, c[3].text = pairs[i][0], pairs[i][1], pairs[i + 1][0], pairs[i + 1][1]
+        sig = signals_of(m)
+        doc.add_paragraph("No stability signals." if not sig else
+                          "Signals (flagged, not removed): " + "; ".join(f"{s['id']} — {s['tests']}" for s in sig))
+        doc.add_heading("4. Basic statistics", 2)
+        _doc_table(doc, ["Statistic", "Value"], [list(r) for r in stats_rows(m)], [2.4, 3.9])
+        doc.add_heading("5. Histogram", 2)
+        doc.add_picture(io.BytesIO(histogram_png(m)), width=Inches(4.6))
+        doc.add_heading("6. Outlier list", 2)
+        outs = outliers_of(m)
+        if outs:
+            _doc_table(doc, ["ID", "Value", "Step", "Reason"],
+                       [[o["id"], fmt(o["value"]), o["step"], o["reason"]] for o in outs], [1.1, 0.8, 1.5, 2.9])
+        else:
+            doc.add_paragraph("No points were removed.")
+        kept = kept_outliers_of(m)
+        if kept:
+            doc.add_paragraph("Outliers kept: " + "; ".join(f"{k['id']} ({fmt(k['value'])}, {k['why']})" for k in kept))
         for w in m.get("warnings", []):
             doc.add_paragraph(w, style="List Bullet")
-        ex = [pt for pt in m["points"] if pt["excluded"]]
-        if ex:
-            doc.add_heading("Excluded points", 2)
-            for pt in ex:
-                doc.add_paragraph(f"{pt['id']} ({fmt(pt['value'])}): {pt['reason']}", style="List Bullet")
 
-    for par in doc.paragraphs[:1]:
-        par.alignment = WD_ALIGN_PARAGRAPH.LEFT
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
 
 
-# -------------------------------------------------------------------- pptx --
-def _tx(slide, text, x, y, w, h, size=12, bold=False, color=INK):
+# ---------------------------------------------------------------- pptx ----
+def _tx(slide, text, x, y, w, h, size=12, bold=False, color=INK, align=None):
     tb = slide.shapes.add_textbox(PI(x), PI(y), PI(w), PI(h))
     tf = tb.text_frame
     tf.word_wrap = True
@@ -331,14 +453,52 @@ def _tx(slide, text, x, y, w, h, size=12, bold=False, color=INK):
     para.font.size, para.font.bold = PPt(size), bold
     para.font.color.rgb = PRGB.from_string(color)
     para.font.name = "Arial"
+    if align:
+        para.alignment = align
     return tb
 
 
-def _bar(slide):
-    s = slide.shapes.add_shape(1, 0, 0, PI(13.333), PI(0.12))
+def _rect(slide, x, y, w, h, color):
+    s = slide.shapes.add_shape(1, PI(x), PI(y), PI(w), PI(h))
     s.fill.solid()
-    s.fill.fore_color.rgb = PRGB.from_string(BRAND)
+    s.fill.fore_color.rgb = PRGB.from_string(color)
     s.line.fill.background()
+    return s
+
+
+def _bar(slide):
+    _rect(slide, 0, 0, 13.333, 0.12, BRAND)
+
+
+def _content_slide(prs, metric_name: str, step_no: int, title: str):
+    s = prs.slides.add_slide(prs.slide_layouts[6])
+    _bar(s)
+    _tx(s, f"{metric_name.upper()} · STEP {step_no} OF 6", 0.5, 0.3, 12, 0.3, 10, True, FAINT)
+    _tx(s, title, 0.5, 0.55, 12, 0.6, 24, True)
+    return s
+
+
+def _ppt_table(slide, header, rows, x, y, widths, size=10, row_h=0.3):
+    tbl = slide.shapes.add_table(len(rows) + 1, len(header), PI(x), PI(y), PI(sum(widths)), PI(row_h * (len(rows) + 1))).table
+    for i, w in enumerate(widths):
+        tbl.columns[i].width = PI(w)
+    for i, h in enumerate(header):
+        c = tbl.cell(0, i)
+        c.text = h
+        c.fill.solid()
+        c.fill.fore_color.rgb = PRGB.from_string(BRAND)
+        p = c.text_frame.paragraphs[0]
+        p.font.size, p.font.bold, p.font.color.rgb = PPt(size), True, PRGB(255, 255, 255)
+    for r, row in enumerate(rows, 1):
+        for i, v in enumerate(row):
+            c = tbl.cell(r, i)
+            c.text = str(v)
+            c.fill.solid()
+            c.fill.fore_color.rgb = PRGB.from_string("FFFFFF" if r % 2 else "F7F6FA")
+            p = c.text_frame.paragraphs[0]
+            p.font.size = PPt(size - 1)
+            p.font.color.rgb = PRGB.from_string(INK)
+    return tbl
 
 
 def build_pptx(b: dict) -> bytes:
@@ -346,63 +506,104 @@ def build_pptx(b: dict) -> bytes:
     prs = Presentation()
     prs.slide_width, prs.slide_height = PI(13.333), PI(7.5)
     blank = prs.slide_layouts[6]
+    ok = _ok(res["metrics"])
 
     s = prs.slides.add_slide(blank)
     _bar(s)
     _tx(s, "PROCESS PERFORMANCE BASELINE", 0.8, 2.3, 11, 0.4, 12, True, FAINT)
     _tx(s, b["name"], 0.8, 2.7, 11, 1, 36, True, BRAND)
-    _tx(s, f"Source {b['filename']} · {b['n_rows']} rows", 0.8, 3.8, 11, 0.5, 16, False, MUTED)
+    _tx(s, f"Source {b['filename']} · {b['n_rows']} rows · {len(ok)} metrics", 0.8, 3.8, 11, 0.5, 16, False, MUTED)
     _tx(s, f"Grant Thornton · {datetime.now():%B %Y}", 0.8, 6.6, 11, 0.4, 11, False, FAINT)
 
     s = prs.slides.add_slide(blank)
     _bar(s)
-    _tx(s, "Baseline summary", 0.5, 0.35, 12, 0.6, 24, True)
-    sm = res["summary"]
-    _tx(s, f"{sm['metrics']} metrics · {sm['green']} green · {sm['amber']} amber · {sm['red']} red · "
-           f"{sm['excluded']} justified exclusions", 0.5, 0.95, 12, 0.4, 12, False, MUTED)
-    ok = _ok(res["metrics"])[:16]
-    cols = ["Metric", "n", "LCL", "CL", "UCL", "Fit", "RAG"]
-    tbl = s.shapes.add_table(len(ok) + 1, len(cols), PI(0.5), PI(1.5), PI(12.3), PI(0.3 * (len(ok) + 1))).table
-    widths = [5.0, 0.8, 1.3, 1.3, 1.3, 1.6, 1.0]
-    for i, w in enumerate(widths):
-        tbl.columns[i].width = PI(w)
-    for i, c in enumerate(cols):
-        cell = tbl.cell(0, i)
-        cell.text = c
-        cell.fill.solid()
-        cell.fill.fore_color.rgb = PRGB.from_string(BRAND)
-        cell.text_frame.paragraphs[0].font.size = PPt(10)
-        cell.text_frame.paragraphs[0].font.bold = True
-        cell.text_frame.paragraphs[0].font.color.rgb = PRGB(255, 255, 255)
-    for r, m in enumerate(ok, 1):
-        bl = m["baseline"]
-        for i, v in enumerate([m["name"], str(m["n_used"]), fmt(bl["lcl"]), fmt(bl["cl"]), fmt(bl["ucl"]),
-                               m["fit"]["best"], RAG_TEXT[m["rag"]]]):
-            cell = tbl.cell(r, i)
-            cell.text = v
-            cell.fill.solid()
-            cell.fill.fore_color.rgb = PRGB.from_string(RAG[m["rag"]][1] if i == 6 else "FFFFFF")
-            para = cell.text_frame.paragraphs[0]
-            para.font.size = PPt(9)
-            para.font.color.rgb = PRGB.from_string(RAG[m["rag"]][0] if i == 6 else INK)
+    _tx(s, "Approach for every metric", 0.5, 0.35, 12, 0.6, 24, True)
+    for i, (k, v) in enumerate(METHOD):
+        y = 1.35 + i * 0.95
+        _rect(s, 0.6, y, 0.55, 0.55, BRAND)
+        _tx(s, str(i + 1), 0.6, y + 0.08, 0.55, 0.4, 16, True, "FFFFFF", align=2)
+        _tx(s, k[3:], 1.4, y - 0.02, 3, 0.4, 14, True)
+        _tx(s, v, 1.4, y + 0.3, 11.3, 0.6, 11, False, MUTED)
 
-    for m in ok:
+    for start in range(0, len(ok), 14):
+        chunk = ok[start:start + 14]
         s = prs.slides.add_slide(blank)
         _bar(s)
-        _tx(s, m["name"], 0.5, 0.35, 12, 0.6, 22, True)
+        _tx(s, "Baseline summary" + (" (continued)" if start else ""), 0.5, 0.35, 12, 0.6, 24, True)
+        tbl = _ppt_table(s, ["Metric", "n", "LCL", "CL", "UCL", "Fit", "Status"],
+                         [[m["name"], m["n_used"], fmt(m["baseline"]["lcl"]), fmt(m["baseline"]["cl"]),
+                           fmt(m["baseline"]["ucl"]), m["fit"]["best"], RAG_TEXT[m["rag"]]] for m in chunk],
+                         0.5, 1.2, [5.0, 0.8, 1.3, 1.3, 1.3, 1.6, 1.0])
+        for r, m in enumerate(chunk, 1):
+            c = tbl.cell(r, 6)
+            c.fill.fore_color.rgb = PRGB.from_string(RAG[m["rag"]][1])
+            c.text_frame.paragraphs[0].font.color.rgb = PRGB.from_string(RAG[m["rag"]][0])
+
+    for idx, m in enumerate(ok, 1):
         bl, ss = m["baseline"], m["stats"]
-        _tx(s, f"{m.get('unit') or ''} · n = {m['n_used']} · {bl['method']}", 0.5, 0.95, 12, 0.4, 11, False, MUTED)
-        s.shapes.add_picture(io.BytesIO(control_chart_png(m)), PI(0.4), PI(1.5), width=PI(8.4))
-        y = 1.6
-        for k, v in [("LCL", bl["lcl"]), ("CL", bl["cl"]), ("UCL", bl["ucl"]), ("Mean", ss["mean"]),
-                     ("Median", ss["median"]), ("Std dev", ss["sd"])]:
-            _tx(s, k.upper(), 9.2, y, 1.6, 0.3, 9, True, FAINT)
-            _tx(s, fmt(v), 10.6, y - 0.05, 2.2, 0.4, 16, True, INK)
-            y += 0.55
-        _tx(s, f"Best fit: {m['fit']['best']}  ·  Stable: {'yes' if m['status']['stable'] else 'no'}  ·  "
-               f"RAG: {RAG_TEXT[m['rag']]}", 9.2, y + 0.1, 3.9, 0.5, 10, False, MUTED)
-        if m.get("warnings"):
-            _tx(s, " ".join(m["warnings"][:2]), 0.5, 6.4, 12.3, 0.8, 10, False, MUTED)
+        # section divider
+        s = prs.slides.add_slide(blank)
+        _rect(s, 0, 0, 13.333, 7.5, BRAND)
+        _tx(s, f"METRIC {idx} OF {len(ok)}", 0.9, 2.4, 11, 0.4, 13, True, "D9CCEF")
+        _tx(s, m["name"], 0.9, 2.8, 11.5, 1.2, 38, True, "FFFFFF")
+        _tx(s, f"{m.get('unit') or ''} · n = {m['n_used']} of {m['n_total']} · baseline {fmt(bl['lcl'])} / "
+               f"{fmt(bl['cl'])} / {fmt(bl['ucl'])} · {RAG_TEXT[m['rag']]}", 0.9, 4.1, 11.5, 0.5, 15, False, "E9E1F5")
+        _tx(s, "  →  ".join(STEPS), 0.9, 6.5, 11.5, 0.4, 12, False, "D9CCEF")
+
+        s = _content_slide(prs, m["name"], 1, "Dot plot")
+        s.shapes.add_picture(io.BytesIO(dotplot_png(m, 11, 4.4)), PI(0.5), PI(1.35), width=PI(12.3))
+        _tx(s, f"All {m['n_total']} points. Red points are removed by the box plot in the next step.",
+            0.5, 6.8, 12.3, 0.4, 11, False, MUTED)
+
+        s = _content_slide(prs, m["name"], 2, f"Box plot · {len(m['box_iterations'])} iteration(s)")
+        fig_h = 0.4 + 1.25 * len(m["box_iterations"])
+        scale = min(8.9 / 8.6, 5.9 / fig_h)
+        s.shapes.add_picture(io.BytesIO(boxplots_png(m, 8.6)), PI(0.4), PI(1.35), width=PI(8.6 * scale))
+        _ppt_table(s, ["Iteration", "n", "Removed"],
+                   [[it["iteration"], it["n"], len(it["removed"])] for it in m["box_iterations"]],
+                   9.6, 1.45, [1.2, 0.8, 1.2], 11)
+        _tx(s, f"Removed {m['n_box_removed']} point(s); limit is 10% of the data. Rebuilt until no point lies "
+               "beyond 1.5×IQR.", 9.6, 1.6 + 0.3 * (len(m["box_iterations"]) + 1), 3.3, 1.4, 10, False, MUTED)
+
+        s = _content_slide(prs, m["name"], 3, "I-MR chart (after outlier removal)")
+        s.shapes.add_picture(io.BytesIO(control_chart_png(m)), PI(0.4), PI(1.35), width=PI(8.6))
+        y = 1.5
+        for k, v in [("UCL", bl["ucl"]), ("CL", bl["cl"]), ("LCL", bl["lcl"])]:
+            _tx(s, k, 9.4, y, 1.2, 0.3, 10, True, FAINT)
+            _tx(s, fmt(v), 10.5, y - 0.07, 2.4, 0.4, 18, True)
+            y += 0.6
+        sig = signals_of(m)
+        _tx(s, "Stable: no stability signals." if not sig else
+            f"{len(sig)} signal(s), flagged not removed: " + "; ".join(f"{x['id']} ({x['tests']})" for x in sig[:4])
+            + ("…" if len(sig) > 4 else ""), 9.4, y + 0.2, 3.6, 2.5, 10, False, MUTED)
+
+        s = _content_slide(prs, m["name"], 4, "Basic statistics")
+        rows = stats_rows(m)
+        half = (len(rows) + 1) // 2
+        _ppt_table(s, ["Statistic", "Value"], [list(r) for r in rows[:half]], 0.5, 1.4, [2.8, 3.2], 11, 0.36)
+        _ppt_table(s, ["Statistic", "Value"], [list(r) for r in rows[half:]], 6.8, 1.4, [2.6, 3.4], 11, 0.36)
+
+        s = _content_slide(prs, m["name"], 5, f"Histogram · best fit {m['fit']['best']}")
+        s.shapes.add_picture(io.BytesIO(histogram_png(m)), PI(0.5), PI(1.35), height=PI(5.3))
+        _ppt_table(s, ["Distribution", "AD", "p-value"],
+                   [[f["name"] + (" ✓" if f["name"] == m["fit"]["best"] else ""),
+                     "—" if f["ad"] is None else f"{f['ad']:.3f}", f["p_label"]] for f in m["fit"]["fits"]],
+                   9.0, 1.5, [1.7, 1.0, 1.2], 11)
+
+        outs = outliers_of(m)
+        chunks = [outs[i:i + 12] for i in range(0, len(outs), 12)] or [[]]
+        for ci, ch in enumerate(chunks):
+            s = _content_slide(prs, m["name"], 6, "Outlier list" + (" (continued)" if ci else ""))
+            if ch:
+                _ppt_table(s, ["ID", "Value", "Step", "Reason"],
+                           [[o["id"], fmt(o["value"]), o["step"], o["reason"][:90]] for o in ch],
+                           0.5, 1.4, [2.0, 1.4, 2.4, 6.5], 11, 0.36)
+            else:
+                _tx(s, "No points were removed for this metric.", 0.5, 1.5, 12, 0.5, 14, False, MUTED)
+            kept = kept_outliers_of(m)
+            if kept and ci == len(chunks) - 1:
+                _tx(s, "Outliers kept: " + "; ".join(f"{k['id']} ({k['why']})" for k in kept),
+                    0.5, 6.6, 12.3, 0.6, 10, False, MUTED)
 
     buf = io.BytesIO()
     prs.save(buf)

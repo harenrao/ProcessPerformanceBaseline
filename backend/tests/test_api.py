@@ -67,18 +67,33 @@ def test_upload_run_exclude_export(client, auth):
     names = [m["name"] for m in run["results"]["metrics"]]
     assert "UAT defect density" in names and "Defect removal efficiency" in names
     m = next(m for m in run["results"]["metrics"] if m["key"] == "dd_uat_defects")
-    assert m["n_used"] == 40  # zero-defect rows kept
+    assert m["n_total"] == 40  # zero-defect rows are data, not dropped
     assert {"lcl", "cl", "ucl"} <= m["baseline"].keys()
 
-    r = client.patch(f"/api/runs/{run['id']}/exclusions", json={"metric": m["key"], "row": 0, "reason": "short"}, headers=auth)
-    assert r.status_code == 400
-    r = client.patch(f"/api/runs/{run['id']}/exclusions",
-                     json={"metric": m["key"], "row": 0, "reason": "Data entry error confirmed"}, headers=auth).json()
-    assert next(x for x in r["results"]["metrics"] if x["key"] == m["key"])["n_used"] == 39
+    # every metric runs the sequence: box-plot iterations end clean or at the 10% cap
+    for x in run["results"]["metrics"]:
+        its = x["box_iterations"]
+        assert its and x["n_box_removed"] <= 4
+        assert not its[-1]["removed"]
+        assert {"p25", "p75", "normality_p"} <= x["stats"].keys()
+
+    url = f"/api/runs/{run['id']}/overrides"
+    assert client.patch(url, json={"metric": m["key"], "row": 0, "action": "exclude", "reason": "short"}, headers=auth).status_code == 400
+    r = client.patch(url, json={"metric": m["key"], "row": 0, "action": "exclude", "reason": "Data entry error confirmed"}, headers=auth).json()
+    m2 = next(x for x in r["results"]["metrics"] if x["key"] == m["key"])
+    assert m2["n_manual_removed"] == 1
+
+    # put a box-plot outlier back
+    eff = next(x for x in r["results"]["metrics"] if x["n_box_removed"])
+    row = next(p["row"] for p in eff["points"] if p["removed_by"] == "box")
+    r = client.patch(url, json={"metric": eff["key"], "row": row, "action": "keep", "reason": "Verified with the team"}, headers=auth).json()
+    eff2 = next(x for x in r["results"]["metrics"] if x["key"] == eff["key"])
+    assert not next(p for p in eff2["points"] if p["row"] == row)["excluded"]
 
     for fmt in ("xlsx", "docx", "pptx"):
-        e = client.get(f"/api/runs/{run['id']}/export/{fmt}", headers=auth)
+        e = client.get(f"/api/runs/{run['id']}/export/{fmt}?metrics=dd_uat_defects,eff_total", headers=auth)
         assert e.status_code == 200 and len(e.content) > 5000
+    assert client.get(f"/api/runs/{run['id']}/export/pptx?metrics=nope", headers=auth).status_code == 400
 
     assert [x["name"] for x in client.get("/api/runs", headers=auth).json()] == ["FY26 PPB"]
 

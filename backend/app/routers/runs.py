@@ -158,23 +158,26 @@ def get_run(rid: int, u: dict = Depends(current_user)):
     return r
 
 
-class ExclusionIn(BaseModel):
+class OverrideIn(BaseModel):
     metric: str
     row: int
-    reason: Optional[str] = None  # empty re-includes the point
+    action: str  # "exclude" (remove by hand), "keep" (put back a box-plot outlier) or "reset"
+    reason: Optional[str] = None
 
 
-@router.patch("/runs/{rid}/exclusions")
-def exclude(rid: int, body: ExclusionIn, u: dict = Depends(current_user)):
+@router.patch("/runs/{rid}/overrides")
+def override(rid: int, body: OverrideIn, u: dict = Depends(current_user)):
     r = _load(rid, u)
-    ex = r["exclusions"].setdefault(body.metric, {})
-    reason = (body.reason or "").strip()
-    if reason:
+    ov = r["exclusions"].setdefault(body.metric, {})
+    if body.action == "reset":
+        ov.pop(str(body.row), None)
+    elif body.action in ("exclude", "keep"):
+        reason = (body.reason or "").strip()
         if len(reason) < 10:
             raise HTTPException(400, "Describe the reason (at least 10 characters).")
-        ex[str(body.row)] = f"{reason} — {u['name']}, {db.now()[:10]}"
+        ov[str(body.row)] = {"action": body.action, "reason": f"{reason} — {u['name']}, {db.now()[:10]}"}
     else:
-        ex.pop(str(body.row), None)
+        raise HTTPException(400, "Unknown action")
     r["results"] = _compute(r)
     db.exec_("UPDATE runs SET exclusions = ?, results = ?, updated_at = ? WHERE id = ?",
              r["exclusions"], r["results"], db.now(), rid)
@@ -202,10 +205,16 @@ def delete(rid: int, u: dict = Depends(current_user)):
 
 
 @router.get("/runs/{rid}/export/{fmt}")
-def export_file(rid: int, fmt: str, u: dict = Depends(current_user)):
+def export_file(rid: int, fmt: str, metrics: Optional[str] = None, u: dict = Depends(current_user)):
+    """`metrics` is a comma-separated list of metric keys; omitted means all metrics."""
     if fmt not in MEDIA:
         raise HTTPException(400, "Format must be xlsx, docx or pptx")
     r = _load(rid, u)
+    if metrics:
+        keys = set(metrics.split(","))
+        r["results"]["metrics"] = [m for m in r["results"]["metrics"] if m["key"] in keys]
+        if not r["results"]["metrics"]:
+            raise HTTPException(400, "Select at least one metric")
     safe = re.sub(r"[^A-Za-z0-9]+", "_", r["name"]).strip("_") or "PPB"
     return Response(export.build(fmt, r), media_type=MEDIA[fmt],
                     headers={"Content-Disposition": f'attachment; filename="PPB_{safe}.{fmt}"'})

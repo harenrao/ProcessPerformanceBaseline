@@ -26,10 +26,19 @@ close it to stop.
 
 1. **Home → New PPB:** drop your data file. The tool shows which columns it found (size, effort,
    defects) and any data-quality notes. Name the run and click **Generate PPB**.
-2. **Result:** a summary table of all metrics, with lower limit, centre line and upper limit. Click a
-   metric to see its control chart, distribution and statistics. If a point is not representative,
-   you can exclude it with a recorded reason, and the baseline recalculates.
-3. **Export:** download the Word, PowerPoint or Excel output.
+2. **Result:** a summary of all metrics with their lower limit, centre line and upper limit. Click a
+   metric to walk through its six steps:
+   1. **Dot plot** of all points.
+   2. **Box plot:** points beyond 1.5×IQR are removed and the box plot is rebuilt, repeatedly, until
+      none remain or 10% of the points are removed. Every iteration is shown.
+   3. **I-MR chart** on the cleaned data. Stability signals are flagged, not removed.
+   4. **Basic statistics:** n, mean, median, SD, min/max, quartiles, 95% CI, normality test and
+      baseline limits.
+   5. **Histogram** with the best-fitting distribution.
+   6. **Outlier list:** every removed point and why. You can put a point back, or remove a flagged
+      point, with a reason, and the baseline recalculates.
+3. **Export:** choose PowerPoint, Word or Excel, and pick the metrics (or Select all). The deck has a
+   section divider per metric, then one slide per step in the same order.
 4. **Past runs:** listed on Home. Open one to review it again or re-download its reports.
 
 ### Input format

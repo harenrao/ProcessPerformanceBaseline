@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { go } from '../App.jsx'
-import { ControlChart, Histogram } from '../charts/charts.jsx'
+import { BoxPlot, ControlChart, DotPlot, Histogram } from '../charts/charts.jsx'
 import { Empty, Kpi, Loading, Modal, PageHead, Pill, RagPill, useToast } from '../components/ui.jsx'
-import { datetime, fmt, pct, RULES } from '../helpers.js'
+import { datetime, fmt, RULES } from '../helpers.js'
 
 export default function Run({ id, metricKey }) {
   const [b, setB] = useState(null)
@@ -37,7 +37,7 @@ export default function Run({ id, metricKey }) {
             ))}
           </div>
         </div>
-        <div>{metric ? <MetricView key={metric.key} m={metric} b={b} editable onChange={setB} /> : <Summary b={b} />}</div>
+        <div>{metric ? <MetricView key={metric.key} m={metric} b={b} onChange={setB} /> : <Summary b={b} />}</div>
       </div>
       {renaming && <RenameDialog b={b} onClose={() => setRenaming(false)} onDone={(nb) => { setB(nb); setRenaming(false) }} />}
     </div></div>
@@ -59,17 +59,59 @@ function RenameDialog({ b, onClose, onDone }) {
 
 function ExportMenu({ b }) {
   const [open, setOpen] = useState(false)
-  const toast = useToast()
-  const dl = async (f) => { setOpen(false); toast(`Preparing ${f.toUpperCase()}…`); try { await api.download(`/runs/${b.id}/export/${f}`, `baseline.${f}`) } catch (e) { toast(e.message, 'err') } }
   return (
-    <div style={{ position: 'relative' }}>
-      <button className="btn btn-ghost" onClick={() => setOpen(!open)} aria-expanded={open}>Export ▾</button>
-      {open && <div className="card" style={{ position: 'absolute', right: 0, top: 42, padding: 6, zIndex: 10, width: 230, boxShadow: 'var(--shadow)' }}>
-        {[['docx', 'Word report', 'Narrative, charts, approval block'], ['pptx', 'PowerPoint deck', 'Summary + one slide per metric'], ['xlsx', 'Excel workbook', 'Limits, data points, fits']].map(([f, l, s]) => (
-          <button key={f} className="nav-item" style={{ display: 'block' }} onClick={() => dl(f)}><div style={{ color: 'var(--ink)', fontWeight: 600 }}>{l}</div><div className="faint" style={{ fontSize: 12 }}>{s}</div></button>
-        ))}
-      </div>}
-    </div>
+    <>
+      <button className="btn btn-primary" onClick={() => setOpen(true)}>Export…</button>
+      {open && <ExportDialog b={b} onClose={() => setOpen(false)} />}
+    </>
+  )
+}
+
+const FORMATS = [['pptx', 'PowerPoint deck', 'Section divider + one slide per step, per metric'],
+  ['docx', 'Word report', 'Same sequence as a document'], ['xlsx', 'Excel workbook', 'Summary, box plot iterations, statistics, outliers']]
+
+function ExportDialog({ b, onClose }) {
+  const ok = b.results.metrics.filter((m) => !m.error)
+  const [fmtSel, setFmt] = useState('pptx')
+  const [sel, setSel] = useState(() => new Set(ok.map((m) => m.key)))
+  const [busy, setBusy] = useState(false)
+  const toast = useToast()
+  const all = sel.size === ok.length
+  const toggle = (k) => { const n = new Set(sel); n.has(k) ? n.delete(k) : n.add(k); setSel(n) }
+  const go = async () => {
+    setBusy(true)
+    try {
+      const q = all ? '' : `?metrics=${encodeURIComponent([...sel].join(','))}`
+      await api.download(`/runs/${b.id}/export/${fmtSel}${q}`, `PPB.${fmtSel}`)
+      toast('Downloaded'); onClose()
+    } catch (e) { toast(e.message, 'err') } finally { setBusy(false) }
+  }
+  return (
+    <Modal title="Export PPB" wide onClose={onClose} footer={<>
+      <span className="muted" style={{ fontSize: 12.5 }}>{sel.size} of {ok.length} metrics{fmtSel === 'pptx' && sel.size > 0 && ` · about ${3 + Math.ceil(sel.size / 14) + sel.size * 7} slides`}</span>
+      <span className="spacer" /><button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+      <button className="btn btn-primary" disabled={!sel.size || busy} onClick={go}>{busy ? 'Preparing…' : 'Download'}</button></>}>
+      <div className="stack">
+        <div className="micro">Format</div>
+        <div className="grid" style={{ gridTemplateColumns: 'repeat(3,1fr)', gap: 10 }}>
+          {FORMATS.map(([f, l, d]) => (
+            <button key={f} className="card" onClick={() => setFmt(f)} style={{ textAlign: 'left', padding: 14, cursor: 'pointer',
+              borderColor: fmtSel === f ? 'var(--brand)' : undefined, background: fmtSel === f ? 'var(--brand-soft)' : undefined }}>
+              <div style={{ fontWeight: 600, color: fmtSel === f ? 'var(--brand)' : 'var(--ink)' }}>{l}</div>
+              <div className="faint" style={{ fontSize: 12 }}>{d}</div>
+            </button>))}
+        </div>
+        <div className="row"><span className="micro">Metrics</span><span className="spacer" />
+          <label className="check" style={{ fontSize: 13 }}><input type="checkbox" checked={all} onChange={() => setSel(all ? new Set() : new Set(ok.map((m) => m.key)))} />Select all</label></div>
+        <div style={{ border: '1px solid var(--line)', borderRadius: 8, maxHeight: 300, overflow: 'auto' }}>
+          {ok.map((m) => (
+            <label key={m.key} className="metric-item" style={{ cursor: 'pointer' }}>
+              <input type="checkbox" checked={sel.has(m.key)} onChange={() => toggle(m.key)} style={{ accentColor: 'var(--brand)' }} />
+              <span className={`rag-dot ${m.rag}`} /><span className="nm">{m.name}</span><span className="faint" style={{ fontSize: 12 }}>{m.unit}</span>
+            </label>))}
+        </div>
+      </div>
+    </Modal>
   )
 }
 
@@ -81,7 +123,7 @@ function Summary({ b }) {
         <Kpi label="Metrics" value={s.metrics} sub={`${s.green} green · ${s.amber} amber · ${s.red} red`} />
         <Kpi label="Stable" value={s.stable} unit={`/ ${s.metrics}`} sub="No run-rule violations" />
         <Kpi label="Normal" value={s.normal} unit={`/ ${s.metrics}`} sub="Others fitted or empirical" />
-        <Kpi label="Points excluded" value={s.excluded} sub={`${s.flagged} flagged for review`} />
+        <Kpi label="Outliers removed" value={s.excluded} sub={`${s.flagged} I-MR signal(s) flagged`} />
       </div>
       <div className="card pad-0">
         <div className="table-wrap"><table className="t compact">
@@ -108,18 +150,31 @@ function Summary({ b }) {
   )
 }
 
-function MetricView({ m, b, editable, onChange }) {
-  const [tab, setTab] = useState('chart')
+const TABS = [['dot', '1 · Dot plot'], ['box', '2 · Box plot'], ['imr', '3 · I-MR chart'], ['stats', '4 · Basic statistics'],
+  ['hist', '5 · Histogram'], ['out', '6 · Outlier list']]
+
+function MetricView({ m, b, onChange }) {
+  const [tab, setTab] = useState('dot')
   const [pick, setPick] = useState(null)
   if (m.error) return <div className="card"><Empty glyph="!" title="Could not baseline this metric">{m.error}</Empty></div>
   const bl = m.baseline, s = m.stats
-  const review = m.points.map((pt, i) => ({ ...pt, i })).filter((pt) => pt.excluded || pt.flags.length || pt.rules?.length)
+  const idx = TABS.findIndex(([k]) => k === tab)
+  const removed = m.points.map((p, i) => ({ ...p, i })).filter((p) => p.excluded)
+    .sort((a, c) => (a.removed_by !== 'box') - (c.removed_by !== 'box') || (a.removed_in || 0) - (c.removed_in || 0))
+  const signals = m.points.map((p, i) => ({ ...p, i })).filter((p) => p.rules?.length && !p.excluded)
+  const kept = []
+  const seen = new Set()
+  for (const it of m.box_iterations) for (const k of it.kept) if (!seen.has(k.row)) { seen.add(k.row); kept.push(k) }
+  const all = m.points.map((p) => p.value)
+  const lo = Math.min(...all), hi = Math.max(...all), pad = (hi - lo) * 0.04 || 1
+  const iByRow = Object.fromEntries(m.points.map((p, i) => [p.row, i]))
 
   return (
     <div className="stack">
       <div className="card">
         <div className="card-head">
-          <div><h3 style={{ fontSize: 17 }}>{m.name}</h3><p>{m.unit} · {m.direction === 'higher' ? 'higher is better' : 'lower is better'} · n = {m.n_used}{m.n_excluded ? ` of ${m.n_total}` : ''}</p></div>
+          <div><h3 style={{ fontSize: 17 }}>{m.name}</h3>
+            <p>{m.unit} · n = {m.n_used} of {m.n_total} · {m.n_box_removed} removed by box plot{m.n_manual_removed ? `, ${m.n_manual_removed} by you` : ''}</p></div>
           <span className="spacer" /><RagPill rag={m.rag} />
         </div>
         <div className="limits">
@@ -127,25 +182,64 @@ function MetricView({ m, b, editable, onChange }) {
           <div className="limit cl"><div className="micro" style={{ color: 'var(--brand)' }}>Centre line</div><div className="v">{fmt(bl.cl)}</div></div>
           <div className="limit"><div className="micro">UCL</div><div className="v">{fmt(bl.ucl)}</div></div>
         </div>
-        <div className="faint" style={{ fontSize: 12, marginTop: 8 }}>Baseline limits: {bl.method}.{!bl.method.startsWith('I-MR') && <> Stability is judged separately on the I-MR chart (control limits {fmt(m.chart.lcl)} – {fmt(m.chart.ucl)}).</>}</div>
+        <div className="faint" style={{ fontSize: 12, marginTop: 8 }}>Baseline limits: {bl.method}.</div>
         {m.warnings?.length > 0 && <div className="stack" style={{ gap: 6, marginTop: 12 }}>
-          {m.warnings.map((w, i) => <div key={i} className={`banner ${/beyond the 3σ/.test(w) ? 'red' : 'amber'}`}>{w}</div>)}
+          {m.warnings.map((w, i) => <div key={i} className={`banner ${/3σ/.test(w) ? 'red' : 'amber'}`}>{w}</div>)}
         </div>}
       </div>
 
       <div className="card">
-        <div className="tabs">
-          {[['chart', 'Control chart'], ['dist', 'Distribution'], ['stats', 'Statistics'], ['review', `Point review (${review.length})`]].map(([k, l]) =>
-            <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}
+        <div className="tabs" style={{ overflowX: 'auto' }}>
+          {TABS.map(([k, l]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)} style={{ whiteSpace: 'nowrap' }}>{l}</button>)}
         </div>
-        {tab === 'chart' && <>
-          <ControlChart metric={m} onPick={(i) => setPick(i)} selected={pick} />
-          <div className="banner ai" style={{ marginTop: 12 }}><b>Read it</b> {m.status.stable
-            ? 'No stability signals: the process is predictable and the limits describe it.'
-            : `${m.status.rule1} point(s) beyond the limits and ${m.status.run_rules} run-rule signal(s). Click a red point to record an assignable cause, or keep it if the cause is common.`}
+
+        {tab === 'dot' && <>
+          <DotPlot metric={m} onPick={setPick} />
+          <p className="muted" style={{ fontSize: 13 }}>All {m.n_total} data points. Red points are removed by the box plot in step 2. Click a point to review it.</p>
+        </>}
+
+        {tab === 'box' && <div className="stack">
+          {m.box_iterations.map((it) => (
+            <div key={it.iteration} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '10px 12px' }}>
+              <div className="row wrap" style={{ marginBottom: 2 }}>
+                <b style={{ fontSize: 13.5 }}>Iteration {it.iteration}</b><span className="muted" style={{ fontSize: 13 }}>n = {it.n}</span>
+                <span className="spacer" />
+                {it.removed.length > 0 ? <Pill cls="red">{it.removed.length} outlier{it.removed.length > 1 ? 's' : ''} removed</Pill>
+                  : it.kept.length > 0 ? <Pill cls="amber">Final — {it.kept.length} outlier{it.kept.length > 1 ? 's' : ''} kept</Pill>
+                  : <Pill cls="green">No outliers — clean</Pill>}
+                {it.removed.length > 0 && it.kept.length > 0 && <Pill cls="amber">{it.kept.length} kept</Pill>}
+              </div>
+              <BoxPlot it={it} domain={[lo - pad, hi + pad]} unit={m.unit} />
+              {it.removed.length > 0 && <div className="faint" style={{ fontSize: 12 }}>Removed: {it.removed.map((r) => `${r.id} (${fmt(r.value)})`).join(', ')}</div>}
+            </div>
+          ))}
+          <p className="muted" style={{ fontSize: 13, margin: 0 }}>Points beyond 1.5×IQR (dashed red fences) are removed and the box plot is rebuilt until none remain, up to 10% of the data.</p>
+        </div>}
+
+        {tab === 'imr' && <>
+          <ControlChart metric={m} onPick={setPick} />
+          <div className="banner ai" style={{ marginTop: 12 }}><b>Read it</b> Built on the {m.n_used} points left after outlier removal. {m.status.stable
+            ? 'No stability signals: the process is predictable.'
+            : `${signals.length} point(s) give stability signals. They are flagged, not removed; click one to investigate or remove it with a reason.`}
             {m.chart.scale === 'log' && ' Charted on the log scale because the data is lognormal.'}</div>
         </>}
-        {tab === 'dist' && <div className="grid-2e">
+
+        {tab === 'stats' && <div className="grid-2e">
+          <table className="t compact"><tbody>
+            {[['Data points (n)', `${m.n_used} used of ${m.n_total}`], ['Mean', fmt(s.mean)], ['Median', fmt(s.median)], ['Standard deviation', fmt(s.sd)],
+              ['Minimum', fmt(s.min)], ['Maximum', fmt(s.max)], ['Q1 (25th percentile)', fmt(s.p25)], ['Q3 (75th percentile)', fmt(s.p75)]].map(([k, v]) =>
+              <tr key={k}><td className="muted">{k}</td><td className="r"><b>{v}</b></td></tr>)}
+          </tbody></table>
+          <table className="t compact"><tbody>
+            {[['95% CI of mean', s.mean_ci ? `${fmt(s.mean_ci[0])} – ${fmt(s.mean_ci[1])}` : '—'],
+              ['Normality (Anderson-Darling)', s.normality_p == null ? '—' : `p ${s.normality_p < 0.005 ? '< 0.005' : s.normality_p.toFixed(3)} · ${s.normality_p >= 0.05 ? 'normal' : 'not normal'}`],
+              ['Best-fit distribution', m.fit.best], ['Baseline LCL', fmt(bl.lcl)], ['Baseline CL', fmt(bl.cl)], ['Baseline UCL', fmt(bl.ucl)],
+              ['Stable', m.status.stable ? 'Yes' : 'No, signals present']].map(([k, v]) =>
+              <tr key={k}><td className="muted">{k}</td><td className="r"><b>{v}</b></td></tr>)}
+          </tbody></table>
+        </div>}
+
+        {tab === 'hist' && <div className="grid-2e">
           <Histogram metric={m} />
           <div>
             <table className="t compact">
@@ -156,83 +250,80 @@ function MetricView({ m, b, editable, onChange }) {
                   <td className="r">{f.ad === null ? '—' : f.ad.toFixed(3)}</td><td className="r">{f.p_label}</td></tr>
               ))}</tbody>
             </table>
-            <p className="muted" style={{ fontSize: 12.5 }}>Anderson-Darling. A p-value above 0.05 means the distribution is a plausible fit. {m.fit.best === 'Nonparametric' && 'Nothing fits, which usually means mixed processes: try Stratification.'}</p>
+            <p className="muted" style={{ fontSize: 12.5 }}>Anderson-Darling goodness of fit on the cleaned data. p above 0.05 means a plausible fit.</p>
           </div>
         </div>}
-        {tab === 'stats' && <div className="stack">
-          <div className="statgrid">
-            {[['Mean', s.mean], ['Median', s.median], ['Std dev', s.sd], ['CV', s.cv], ['Min', s.min], ['P10', s.p10], ['P90', s.p90], ['Max', s.max]].map(([k, v]) =>
-              <div key={k}><div className="k">{k}</div><div className="v">{fmt(v)}</div></div>)}
-          </div>
-          <div className="statgrid" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>
-            <div><div className="k">95% CI mean</div><div className="v">{s.mean_ci ? `${fmt(s.mean_ci[0])} – ${fmt(s.mean_ci[1])}` : '—'}</div></div>
-            <div><div className="k">95% CI median</div><div className="v">{s.median_ci ? `${fmt(s.median_ci[0])} – ${fmt(s.median_ci[1])}` : '—'}</div></div>
-            <div><div className="k">σ within (MR̄/d₂)</div><div className="v">{fmt(m.chart.sigma_within)}{m.chart.scale === 'log' && <span className="faint" style={{ fontSize: 11 }}> log</span>}</div></div>
-          </div>
-          {m.capability ? (
-            <div className="statgrid">
-              {[['Cpk', m.capability.cpk], ['Ppk', m.capability.ppk], ['Within spec (observed)', pct(m.capability.pct_within_observed)], ['Within spec (fitted)', pct(m.capability.pct_within_expected)]].map(([k, v]) =>
-                <div key={k}><div className="k">{k}</div><div className="v">{typeof v === 'number' ? fmt(v) : v}</div></div>)}
-            </div>
-          ) : <div className="banner grey">Set spec limits on the Metrics page to see capability (Cpk, Ppk, % within spec).</div>}
-          {m.goal !== null && m.goal !== undefined && <div className={`banner ${m.goal_met ? 'green' : 'amber'}`}><b>Goal {fmt(m.goal)}</b> The baseline mean {fmt(s.mean)} {m.goal_met ? 'meets' : 'does not meet'} the goal.</div>}
+
+        {tab === 'out' && <div className="stack">
+          {removed.length === 0 ? <Empty glyph="✓" title="No points removed" /> : (
+            <div className="table-wrap"><table className="t compact">
+              <thead><tr><th>ID</th><th className="r">Value</th><th>Step</th><th>Reason</th><th></th></tr></thead>
+              <tbody>{removed.map((p) => (
+                <tr key={p.row}><td className="mono">{p.id}</td><td className="r">{fmt(p.value)}</td>
+                  <td>{p.removed_by === 'box' ? `Box plot, iteration ${p.removed_in}` : 'Removed by user'}</td>
+                  <td style={{ fontSize: 12.5, maxWidth: 340 }}>{p.reason}</td>
+                  <td><button className="btn-link" onClick={() => setPick(p.i)}>{p.removed_by === 'box' ? 'Put back…' : 'Undo'}</button></td></tr>
+              ))}</tbody>
+            </table></div>
+          )}
+          {kept.length > 0 && <><div className="micro">Outliers kept</div>
+            <table className="t compact"><tbody>{kept.map((k) => (
+              <tr key={k.row}><td className="mono">{k.id}</td><td className="r">{fmt(k.value)}</td><td className="muted">{k.why}</td>
+                <td><button className="btn-link" onClick={() => setPick(iByRow[k.row])}>Review</button></td></tr>))}</tbody></table></>}
+          {signals.length > 0 && <><div className="micro">I-MR signals (flagged, not removed)</div>
+            <table className="t compact"><tbody>{signals.map((p) => (
+              <tr key={p.row}><td className="mono">{p.id}</td><td className="r">{fmt(p.value)}</td>
+                <td>{p.rules.map((r) => <span key={r} className="tag" style={{ marginRight: 4 }} title={RULES[r]}>Test {r}</span>)}</td>
+                <td><button className="btn-link" onClick={() => setPick(p.i)}>Remove…</button></td></tr>))}</tbody></table></>}
         </div>}
-        {tab === 'review' && (review.length === 0 ? <Empty glyph="✓" title="Nothing to review">No points were flagged or excluded.</Empty> : (
-          <div className="table-wrap"><table className="t compact">
-            <thead><tr><th>Obs</th><th>ID</th><th className="r">Value</th><th>Signals</th><th>Status</th><th></th></tr></thead>
-            <tbody>{review.map((pt) => (
-              <tr key={pt.row} className={pt.excluded ? 'dim' : ''}>
-                <td className="num">{pt.i + 1}</td><td className="mono">{pt.id}</td><td className="r">{fmt(pt.value)}</td>
-                <td>{[...(pt.flags || []), ...(pt.rules || []).map((r) => `Test ${r}`)].map((f) => <span key={f} className="tag" style={{ marginRight: 4 }}>{f}</span>)}</td>
-                <td style={{ maxWidth: 320 }}>{pt.excluded ? <span style={{ fontSize: 12.5 }}>{pt.reason}</span> : <Pill cls="blue">Included</Pill>}</td>
-                <td>{editable && <button className="btn-link" onClick={() => setPick(pt.i)}>{pt.excluded ? 'Re-include' : 'Exclude…'}</button>}</td>
-              </tr>
-            ))}</tbody>
-          </table></div>
-        ))}
+
+        <div className="row" style={{ marginTop: 16, borderTop: '1px solid var(--line-soft)', paddingTop: 12 }}>
+          {idx > 0 && <button className="btn btn-ghost btn-sm" onClick={() => setTab(TABS[idx - 1][0])}>← {TABS[idx - 1][1].slice(4)}</button>}
+          <span className="spacer" />
+          {idx < TABS.length - 1 && <button className="btn btn-ghost btn-sm" onClick={() => setTab(TABS[idx + 1][0])}>{TABS[idx + 1][1].slice(4)} →</button>}
+        </div>
       </div>
-      {pick !== null && <PointDialog m={m} b={b} i={pick} editable={editable} onClose={() => setPick(null)} onChange={(nb) => { onChange(nb); setPick(null) }} />}
+      {pick !== null && <PointDialog m={m} b={b} i={pick} onClose={() => setPick(null)} onChange={(nb) => { onChange(nb); setPick(null) }} />}
     </div>
   )
 }
 
 const CAUSES = ['Data entry error, corrected value not available', 'Different process or lifecycle (not representative)',
   'Scope change mid-flight not reflected in size', 'One-off event (outage, attrition, client hold)', 'Pilot or new technology, not yet standard']
+const KEEP_CAUSES = ['Valid data point, verified with the project team', 'Genuine process behaviour, should be in the baseline']
 
-function PointDialog({ m, b, i, editable, onClose, onChange }) {
+function PointDialog({ m, b, i, onClose, onChange }) {
   const pt = m.points[i]
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
   const toast = useToast()
-  const save = async (r) => {
+  const mode = pt.removed_by === 'box' ? 'keep' : pt.removed_by === 'manual' || pt.kept_reason ? 'reset' : 'exclude'
+  const send = async (action) => {
     setBusy(true)
-    try { onChange(await api.patch(`/runs/${b.id}/exclusions`, { metric: m.key, row: pt.row, reason: r })); toast(r ? 'Point excluded, baseline recomputed' : 'Point re-included') }
-    catch (e) { toast(e.message, 'err') } finally { setBusy(false) }
+    try {
+      onChange(await api.patch(`/runs/${b.id}/overrides`, { metric: m.key, row: pt.row, action, reason }))
+      toast({ keep: 'Point put back, baseline recalculated', exclude: 'Point removed, baseline recalculated', reset: 'Change undone, baseline recalculated' }[action])
+    } catch (e) { toast(e.message, 'err') } finally { setBusy(false) }
   }
+  const cta = { keep: 'Put back with this reason', exclude: 'Remove with this reason', reset: pt.kept_reason ? 'Undo: let the box plot decide' : 'Undo removal' }[mode]
   return (
-    <Modal title={`${pt.id} · observation ${i + 1}`} onClose={onClose} footer={editable ? (pt.excluded
-      ? <><span className="spacer" /><button className="btn btn-ghost" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={busy} onClick={() => save(null)}>Re-include point</button></>
-      : <><span className="spacer" /><button className="btn btn-ghost" onClick={onClose}>Keep point</button><button className="btn btn-primary" disabled={busy || reason.trim().length < 10} onClick={() => save(reason)}>Exclude with this cause</button></>)
-      : <button className="btn btn-ghost" onClick={onClose}>Close</button>}>
+    <Modal title={`${pt.id} · ${fmt(pt.value)} ${m.unit || ''}`} onClose={onClose} footer={<>
+      <span className="spacer" /><button className="btn btn-ghost" onClick={onClose}>Close</button>
+      <button className="btn btn-primary" disabled={busy || (mode !== 'reset' && reason.trim().length < 10)} onClick={() => send(mode)}>{cta}</button></>}>
       <div className="stack">
-        <div className="statgrid" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>
-          <div><div className="k">Value</div><div className="v">{fmt(pt.value)}</div></div>
-          <div><div className="k">Centre line</div><div className="v">{fmt(m.baseline.cl)}</div></div>
-          <div><div className="k">Control limits</div><div className="v">{fmt(m.chart.lcl)} – {fmt(m.chart.ucl)}</div></div>
-        </div>
-        {(pt.rules?.length > 0 || pt.flags?.length > 0) ? <div className="stack" style={{ gap: 6 }}>
-          {(pt.rules || []).map((r) => <div key={r} className="banner red"><b>Test {r}</b> {RULES[r]}</div>)}
-          {(pt.flags || []).map((f) => <div key={f} className="banner amber"><b>{f}</b> flagged by outlier screening</div>)}
-        </div> : <div className="banner grey">No statistical signal on this point.</div>}
-        {pt.excluded && <div className="banner grey"><b>Excluded</b> {pt.reason}</div>}
-        {!pt.excluded && editable && <>
-          <div className="field"><label>Assignable cause</label>
-            <textarea className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this point not representative of the process?" autoFocus />
-            <span className="hint">Recorded with your name and date, shown in reports and the audit trail. A statistical flag alone is not a cause.</span></div>
-          <div className="row wrap">{CAUSES.map((c) => <button key={c} className="tag" style={{ border: 0, cursor: 'pointer' }} onClick={() => setReason(c)}>{c}</button>)}</div>
+        {pt.removed_by === 'box' && <div className="banner red"><b>Removed</b> Box plot outlier in iteration {pt.removed_in} (beyond the 1.5×IQR fence).</div>}
+        {pt.removed_by === 'manual' && <div className="banner grey"><b>Removed by user</b> {pt.reason}</div>}
+        {pt.kept_reason && <div className="banner amber"><b>Kept by user</b> {pt.kept_reason}</div>}
+        {(pt.rules || []).map((r) => <div key={r} className="banner red"><b>I-MR test {r}</b> {RULES[r]}</div>)}
+        {mode === 'exclude' && !(pt.rules || []).length && <div className="banner grey">No statistical signal on this point.</div>}
+        {mode !== 'reset' && <>
+          <div className="field"><label>{mode === 'keep' ? 'Why should this point stay in the baseline?' : 'Why is this point not representative?'}</label>
+            <textarea className="input" value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
+            <span className="hint">Recorded with your name and date, and shown in the outlier list of the reports.</span></div>
+          <div className="row wrap">{(mode === 'keep' ? KEEP_CAUSES : CAUSES).map((c) =>
+            <button key={c} className="tag" style={{ border: 0, cursor: 'pointer' }} onClick={() => setReason(c)}>{c}</button>)}</div>
         </>}
       </div>
     </Modal>
   )
 }
-

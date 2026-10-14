@@ -205,3 +205,88 @@ export function Histogram({ metric }) {
     </div>
   )
 }
+
+/* ------------------------------------------------------------ dot plot -- */
+export function DotPlot({ metric, onPick }) {
+  const [ref, W] = useWidth()
+  const [tip, setTip] = useState(null)
+  const pts = metric.points
+  const vals = pts.map((p) => p.value)
+  const lo = Math.min(...vals), hi = Math.max(...vals)
+  const nb = Math.min(48, Math.max(14, pts.length))
+  const bw = (hi - lo) / nb || 1
+  const stacks = {}
+  const placed = pts.map((p, i) => ({ p, i })).sort((a, b) => a.p.value - b.p.value).map(({ p, i }) => {
+    const b = Math.min(nb - 1, Math.floor((p.value - lo) / bw))
+    stacks[b] = (stacks[b] || 0) + 1
+    return { p, i, bx: lo + (b + 0.5) * bw, level: stacks[b] }
+  })
+  const maxLevel = Math.max(...Object.values(stacks))
+  const r = Math.max(3, Math.min(6, (W - 80) / nb / 2.4))
+  const m = { l: 24, r: 24, t: 14, b: 34 }
+  const H = Math.max(140, m.t + m.b + maxLevel * (r * 2 + 2) + 8)
+  const pad = (hi - lo) * 0.04 || 1
+  const x = scale(lo - pad, hi + pad, m.l, W - m.r)
+  const yOf = (lv) => H - m.b - (lv - 0.5) * (r * 2 + 2)
+  const color = (p) => (!p.excluded ? 'var(--series)' : p.removed_by === 'box' ? 'var(--red)' : 'var(--bg)')
+  return (
+    <div className="chart" ref={ref}>
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Dot plot of ${metric.name}`}>
+        <line x1={m.l} x2={W - m.r} y1={H - m.b} y2={H - m.b} stroke="var(--line)" />
+        <g className="axis">{ticks(lo - pad, hi + pad, 6).map((t) => <text key={t} x={x(t)} y={H - m.b + 16} textAnchor="middle">{fmt(t)}</text>)}</g>
+        {placed.map(({ p, i, bx, level }) => (
+          <circle key={i} cx={x(bx)} cy={yOf(level)} r={r} fill={color(p)}
+            stroke={p.excluded && p.removed_by !== 'box' ? 'var(--grey)' : 'var(--bg)'} strokeWidth="1.5"
+            style={{ cursor: onPick ? 'pointer' : 'default' }} onClick={() => onPick?.(i)}
+            onMouseEnter={(e) => {
+              const rr = e.currentTarget.ownerSVGElement.getBoundingClientRect(), box = ref.current.getBoundingClientRect()
+              setTip({ x: (x(bx) / W) * rr.width + rr.left - box.left, y: (yOf(level) / H) * rr.height + rr.top - box.top,
+                content: <><b>{p.id}</b><br />{fmt(p.value)} {metric.unit}{p.excluded && <><br />{p.removed_by === 'box' ? `Removed: box plot iteration ${p.removed_in}` : 'Removed by user'}</>}</> })
+            }} onMouseLeave={() => setTip(null)} />
+        ))}
+        <text className="axis" x={(m.l + W - m.r) / 2} y={H - 4} textAnchor="middle" style={{ fontSize: 10.5, fill: 'var(--muted)' }}>{metric.unit}</text>
+      </svg>
+      <Tip tip={tip} />
+      <div className="legend">
+        <span><i style={{ background: 'var(--series)' }} />Kept</span>
+        <span><i style={{ background: 'var(--red)' }} />Removed by box plot</span>
+        <span><i style={{ background: 'var(--bg)', border: '1.5px solid var(--grey)' }} />Removed by user</span>
+      </div>
+    </div>
+  )
+}
+
+/* ------------------------------------------- box plot (one iteration) -- */
+export function BoxPlot({ it, domain, unit }) {
+  const [ref, W] = useWidth()
+  const [tip, setTip] = useState(null)
+  const b = it.box
+  const H = 96, m = { l: 20, r: 20, t: 16, b: 28 }, cy = 44
+  const x = scale(domain[0], domain[1], m.l, W - m.r)
+  const show = (e, v, label) => {
+    const rr = e.currentTarget.ownerSVGElement.getBoundingClientRect(), box = ref.current.getBoundingClientRect()
+    setTip({ x: (x(v) / W) * rr.width + rr.left - box.left, y: (cy / H) * rr.height + rr.top - box.top, content: label })
+  }
+  return (
+    <div className="chart" ref={ref}>
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Box plot iteration ${it.iteration}`}>
+        <g className="grid">{ticks(domain[0], domain[1], 6).map((t) => <line key={t} x1={x(t)} x2={x(t)} y1={m.t} y2={H - m.b} />)}</g>
+        <g className="axis">{ticks(domain[0], domain[1], 6).map((t) => <text key={t} x={x(t)} y={H - m.b + 15} textAnchor="middle">{fmt(t)}</text>)}</g>
+        {[['Lower fence', b.lower_fence], ['Upper fence', b.upper_fence]].map(([l, v]) => v >= domain[0] && v <= domain[1] &&
+          <line key={l} x1={x(v)} x2={x(v)} y1={m.t} y2={H - m.b} stroke="var(--red)" strokeDasharray="3 3" opacity=".5" />)}
+        <line x1={x(b.whisker_low)} x2={x(b.q1)} y1={cy} y2={cy} stroke="var(--muted)" />
+        <line x1={x(b.q3)} x2={x(b.whisker_high)} y1={cy} y2={cy} stroke="var(--muted)" />
+        {[b.whisker_low, b.whisker_high].map((v, k) => <line key={k} x1={x(v)} x2={x(v)} y1={cy - 8} y2={cy + 8} stroke="var(--muted)" />)}
+        <rect x={x(b.q1)} y={cy - 14} width={Math.max(x(b.q3) - x(b.q1), 1)} height="28" rx="4" fill="var(--blue-bg)" stroke="var(--series)"
+          onMouseEnter={(e) => show(e, b.median, <>Q1 {fmt(b.q1)} · median {fmt(b.median)} · Q3 {fmt(b.q3)}<br />Fences {fmt(b.lower_fence)} – {fmt(b.upper_fence)}</>)}
+          onMouseLeave={() => setTip(null)} />
+        <line x1={x(b.median)} x2={x(b.median)} y1={cy - 14} y2={cy + 14} stroke="var(--series)" strokeWidth="2.5" />
+        {it.removed.map((o) => <circle key={o.row} cx={x(o.value)} cy={cy} r="5" fill="var(--red)" stroke="var(--bg)" strokeWidth="1.5"
+          onMouseEnter={(e) => show(e, o.value, <><b>{o.id}</b> · {fmt(o.value)} {unit}<br />Removed in this iteration</>)} onMouseLeave={() => setTip(null)} />)}
+        {it.kept.map((o) => <rect key={o.row} x={x(o.value) - 5} y={cy - 5} width="10" height="10" transform={`rotate(45 ${x(o.value)} ${cy})`} fill="var(--amber)"
+          onMouseEnter={(e) => show(e, o.value, <><b>{o.id}</b> · {fmt(o.value)} {unit}<br />Outlier kept ({o.why})</>)} onMouseLeave={() => setTip(null)} />)}
+      </svg>
+      <Tip tip={tip} />
+    </div>
+  )
+}
