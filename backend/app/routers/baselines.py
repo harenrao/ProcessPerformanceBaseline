@@ -98,7 +98,8 @@ def exclude(bid: int, body: ExclusionIn, u: dict = Depends(require_gt)):
         ex.pop(str(body.row), None)
         action = "Re-included data point"
     _save_results(b)
-    db.audit(p["id"], u, action, f"v{b['version']} · {body.metric} · row {body.row + 1}" + (f" · {reason}" if reason else ""))
+    mname = next((m["name"] for m in b["metrics"] if m["key"] == body.metric), body.metric)
+    db.audit(p["id"], u, action, f"v{b['version']} · {mname} · row {body.row + 1}" + (f" · {reason}" if reason else ""))
     return get(bid, u)
 
 
