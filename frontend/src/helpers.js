@@ -1,17 +1,3 @@
-// Keep in sync with USERS in backend/app/seed.py
-export const DEMO = [
-  { username: 'gt.admin', password: 'gt-admin', role: 'GT Admin', name: 'Harender Singh' },
-  { username: 'gt.kalpana', password: 'gt-2026', role: 'GT Director', name: 'Kalpana Tikoo' },
-  { username: 'gt.diksha', password: 'gt-2026', role: 'GT Consultant', name: 'Diksha Gupta' },
-  { username: 'meridian.cio', password: 'client-2026', role: 'Client', name: 'Meridian Bank' },
-  { username: 'acme.cto', password: 'client-2026', role: 'Client', name: 'Acme Industries' },
-  { username: 'nordwind.it', password: 'client-2026', role: 'Client', name: 'Nordwind Logistics' },
-]
-
-export const isGT = (u) => u && u.role !== 'Client'
-export const canApprove = (u) => u && (u.role === 'GT Admin' || u.role === 'GT Director')
-export const canManageUsers = canApprove
-
 export function fmt(v, digits = 4) {
   if (v === null || v === undefined || Number.isNaN(v)) return '—'
   if (typeof v !== 'number') return String(v)
@@ -30,12 +16,6 @@ export const datetime = (s) => (s ? new Date(s).toLocaleString(undefined, { day:
 export const initials = (n = '') => n.split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase()
 
 export const RAG_LABEL = { green: 'Green', amber: 'Amber', red: 'Red', grey: 'Not run' }
-export const STATUS = {
-  draft: { cls: 'grey', label: 'Draft' },
-  submitted: { cls: 'amber', label: 'In review' },
-  approved: { cls: 'green', label: 'Approved' },
-  superseded: { cls: 'grey', label: 'Superseded' },
-}
 
 export const RULES = {
   1: '1 point beyond 3σ',

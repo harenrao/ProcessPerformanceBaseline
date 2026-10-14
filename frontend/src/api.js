@@ -38,6 +38,7 @@ export const api = {
   patch: (p, b) => request('PATCH', p, b),
   del: (p) => request('DELETE', p),
   upload: (p, file) => { const f = new FormData(); f.append('file', file); return request('POST', p, undefined, { form: f }) },
+  form: (p, formData) => request('POST', p, undefined, { form: formData }),
   login: (username, password) => {
     const f = new URLSearchParams({ username, password })
     return fetch('/api/auth/login', { method: 'POST', body: f }).then(async (r) => {

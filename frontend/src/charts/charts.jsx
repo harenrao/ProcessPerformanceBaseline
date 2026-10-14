@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { fmt, RULES } from '../helpers.js'
 
 /* Hand-rolled SVG charts: thin marks, hairline grid, hover tooltips, text in ink tokens. */
@@ -203,97 +203,5 @@ export function Histogram({ metric }) {
         {marks.some(([l]) => ['LSL', 'USL', 'Goal'].includes(l)) && <span><i className="dash" style={{ borderTopColor: 'var(--brand-accent)' }} />Spec / goal</span>}
       </div>
     </div>
-  )
-}
-
-/* ------------------------------------------------------- box plots ------ */
-export function BoxPlots({ groups, points, unit }) {
-  const [ref, W] = useWidth()
-  const [tip, setTip] = useState(null)
-  const names = Object.keys(groups)
-  const rowH = 46, m = { l: 110, r: 24, t: 10, b: 30 }
-  const H = m.t + names.length * rowH + m.b
-  const all = points.map((p) => p.value)
-  const lo = Math.min(...all), hi = Math.max(...all)
-  const pad = (hi - lo) * 0.05 || 1
-  const x = scale(Math.max(lo - pad, Math.min(...all) >= 0 ? 0 : -Infinity), hi + pad, m.l, W - m.r)
-  const jitter = useMemo(() => points.map((_, i) => ((Math.sin(i * 12.9898) * 43758.5453) % 1) * 0.5), [points])
-  return (
-    <div className="chart" ref={ref}>
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Box plots by group">
-        <g className="grid">{ticks(lo, hi).map((t) => <line key={t} x1={x(t)} x2={x(t)} y1={m.t} y2={H - m.b} />)}</g>
-        <g className="axis">{ticks(lo, hi).map((t) => <text key={t} x={x(t)} y={H - m.b + 16} textAnchor="middle">{fmt(t)}</text>)}</g>
-        {names.map((g, gi) => {
-          const b = groups[g].box, cy = m.t + gi * rowH + rowH / 2, c = 'var(--series)'
-          if (!b) return null
-          return (
-            <g key={g}>
-              <text x={m.l - 12} y={cy + 4} textAnchor="end" style={{ fontSize: 12, fill: 'var(--ink)', fontWeight: 600 }}>{g}</text>
-              <text x={m.l - 12} y={cy + 17} textAnchor="end" style={{ fontSize: 10.5, fill: 'var(--faint)' }}>n = {groups[g].n}</text>
-              <line x1={x(b.lo)} x2={x(b.hi)} y1={cy} y2={cy} stroke="var(--muted)" />
-              <rect x={x(b.q1)} y={cy - 11} width={Math.max(x(b.q3) - x(b.q1), 1)} height="22" rx="4" fill={c} opacity=".18" stroke={c} />
-              <line x1={x(b.median)} x2={x(b.median)} y1={cy - 11} y2={cy + 11} stroke={c} strokeWidth="2.5" />
-            </g>
-          )
-        })}
-        {points.map((p, i) => {
-          const gi = names.indexOf(p.group), cy = m.t + gi * rowH + rowH / 2 + (jitter[i] - 0.25) * 22
-          return (
-            <circle key={i} cx={x(p.value)} cy={cy} r="3" fill="var(--ink)" opacity=".45"
-              onMouseEnter={(e) => {
-                const r = e.currentTarget.ownerSVGElement.getBoundingClientRect(), box = ref.current.getBoundingClientRect()
-                setTip({ x: (x(p.value) / W) * r.width + r.left - box.left, y: (cy / H) * r.height + r.top - box.top,
-                  content: <><b>{p.group}</b><br />{fmt(p.value)} {unit}</> })
-              }} onMouseLeave={() => setTip(null)} />
-          )
-        })}
-      </svg>
-      <Tip tip={tip} />
-    </div>
-  )
-}
-
-/* ------------------------------------------------------------ scatter --- */
-export function Scatter({ xs, ys, xLabel, yLabel, line, ids }) {
-  const [ref, W] = useWidth()
-  const [tip, setTip] = useState(null)
-  const H = 300, m = { l: 56, r: 18, t: 14, b: 40 }
-  const xlo = Math.min(...xs), xhi = Math.max(...xs), ylo = Math.min(...ys), yhi = Math.max(...ys)
-  const px = (xhi - xlo) * 0.05 || 1, py = (yhi - ylo) * 0.08 || 1
-  const x = scale(xlo - px, xhi + px, m.l, W - m.r), y = scale(ylo - py, yhi + py, H - m.b, m.t)
-  return (
-    <div className="chart" ref={ref}>
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${yLabel} against ${xLabel}`}>
-        <g className="grid">{ticks(ylo - py, yhi + py).map((t) => <line key={t} x1={m.l} x2={W - m.r} y1={y(t)} y2={y(t)} />)}</g>
-        <g className="axis">
-          {ticks(ylo - py, yhi + py).map((t) => <text key={t} x={m.l - 8} y={y(t) + 3.5} textAnchor="end">{fmt(t)}</text>)}
-          {ticks(xlo - px, xhi + px).map((t) => <text key={t} x={x(t)} y={H - m.b + 15} textAnchor="middle">{fmt(t)}</text>)}
-          <text x={(m.l + W - m.r) / 2} y={H - 4} textAnchor="middle">{xLabel}</text>
-          <text transform={`translate(12 ${(m.t + H - m.b) / 2}) rotate(-90)`} textAnchor="middle">{yLabel}</text>
-        </g>
-        {line && <line x1={x(line[0][0])} y1={y(line[0][1])} x2={x(line[1][0])} y2={y(line[1][1])} stroke="var(--ink)" strokeWidth="2" />}
-        {xs.map((v, i) => (
-          <circle key={i} cx={x(v)} cy={y(ys[i])} r="4.5" fill="var(--series)" stroke="var(--bg)" strokeWidth="2" opacity=".85"
-            onMouseEnter={(e) => {
-              const r = e.currentTarget.ownerSVGElement.getBoundingClientRect(), box = ref.current.getBoundingClientRect()
-              setTip({ x: (x(v) / W) * r.width + r.left - box.left, y: (y(ys[i]) / H) * r.height + r.top - box.top,
-                content: <>{ids?.[i] && <><b>{ids[i]}</b><br /></>}{xLabel}: {fmt(v)}<br />{yLabel}: {fmt(ys[i])}</> })
-            }} onMouseLeave={() => setTip(null)} />
-        ))}
-      </svg>
-      <Tip tip={tip} />
-    </div>
-  )
-}
-
-/* ------------------------------------------------- mini sparkline ------- */
-export function Spark({ values, w = 120, h = 28 }) {
-  if (!values?.length) return null
-  const lo = Math.min(...values), hi = Math.max(...values)
-  const x = scale(0, values.length - 1, 2, w - 2), y = scale(lo, hi, h - 3, 3)
-  return (
-    <svg width={w} height={h} aria-hidden="true">
-      <polyline points={values.map((v, i) => `${x(i)},${y(v)}`).join(' ')} fill="none" stroke="var(--series)" strokeWidth="1.5" opacity=".7" />
-    </svg>
   )
 }

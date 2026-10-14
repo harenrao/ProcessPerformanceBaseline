@@ -2,54 +2,34 @@ import React, { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { go } from '../App.jsx'
 import { ControlChart, Histogram } from '../charts/charts.jsx'
-import { Empty, Kpi, Loading, Modal, PageHead, Pill, RagPill, Seg, StatusPill, useToast } from '../components/ui.jsx'
-import { canApprove, date, fmt, pct, RULES } from '../helpers.js'
-import { SettingsForm } from './Baselines.jsx'
+import { Empty, Kpi, Loading, Modal, PageHead, Pill, RagPill, useToast } from '../components/ui.jsx'
+import { datetime, fmt, pct, RULES } from '../helpers.js'
 
-export default function BaselineDetail({ p, user, gt, reload, bid, metricKey, crumbs }) {
+export default function Run({ id, metricKey }) {
   const [b, setB] = useState(null)
-  const [dialog, setDialog] = useState(null)
+  const [renaming, setRenaming] = useState(false)
   const toast = useToast()
-  useEffect(() => { api.get(`/baselines/${bid}`).then(setB).catch((e) => toast(e.message, 'err')) }, [bid])
+  useEffect(() => { api.get(`/runs/${id}`).then(setB).catch((e) => { toast(e.message, 'err'); go('') }) }, [id])
   if (!b) return <Loading />
-
-  const editable = gt && b.status === 'draft'
   const res = b.results
   const metric = metricKey && res.metrics.find((m) => m.key === metricKey)
-  const update = (nb) => { setB(nb); reload() }
-  const act = async (path, body, msg) => {
-    try { update(await api.post(`/baselines/${bid}/${path}`, body)); toast(msg); setDialog(null) } catch (e) { toast(e.message, 'err') }
-  }
-
-  const head = (
-    <PageHead crumbs={<>{crumbs} / <a href={`#/p/${p.id}/baselines`}>Baselines</a> / v{b.version}</>}
-      title={<span className="row" style={{ gap: 12 }}>{b.label}<StatusPill status={b.status} /></span>}
-      sub={<>v{b.version} · prepared by {b.created_by_name} {date(b.created_at)}{b.approved_by_name && ` · approved by ${b.approved_by_name} ${date(b.approved_at)}`}</>}>
-      <ExportMenu b={b} />
-      {editable && <button className="btn btn-ghost" onClick={() => setDialog('settings')}>Settings</button>}
-      {editable && <button className="btn btn-primary" onClick={() => setDialog('submit')}>Submit for approval →</button>}
-      {gt && b.status === 'submitted' && canApprove(user) && b.submitted_by !== user.id &&
-        <button className="btn btn-primary" onClick={() => setDialog('approve')}>Review & approve</button>}
-      {gt && (b.status === 'submitted' || (b.status === 'approved' && canApprove(user))) &&
-        <button className="btn btn-ghost" onClick={() => setDialog('return')}>Return to draft</button>}
-    </PageHead>
-  )
 
   return (
-    <>
-      {head}
-      <Workflow b={b} />
-      {b.review_note && <div className="banner grey" style={{ marginBottom: 14 }}><b>Review note</b> {b.review_note}</div>}
-      {b.status === 'submitted' && b.submitted_by === user.id && canApprove(user) &&
-        <div className="banner amber" style={{ marginBottom: 14 }}><b>Segregation of duties</b> You submitted this version, so another director or admin must approve it.</div>}
+    <div className="content"><div className="content-inner">
+      <PageHead crumbs={<><a href="#/">Home</a> / {b.name}</>}
+        title={b.name}
+        sub={<>{b.filename} · {b.n_rows} rows · run {datetime(b.created_at)}{b.updated_at !== b.created_at && ` · updated ${datetime(b.updated_at)}`}</>}>
+        <button className="btn btn-ghost" onClick={() => setRenaming(true)}>Rename</button>
+        <ExportMenu b={b} />
+      </PageHead>
 
       <div className="grid-2" style={{ gridTemplateColumns: '290px 1fr', alignItems: 'start' }}>
         <div className="card pad-0">
-          <div className={`metric-item ${!metric ? 'on' : ''}`} onClick={() => go(`p/${p.id}/baselines/${bid}`)} style={{ fontWeight: 600 }}>
-            <span className="glyph">▤</span><span className="nm">Summary of all metrics</span></div>
+          <div className={`metric-item ${!metric ? 'on' : ''}`} onClick={() => go(`run/${id}`)} style={{ fontWeight: 600 }}>
+            <span className="glyph">▤</span><span className="nm">Baseline summary</span></div>
           <div className="metric-list">
             {res.metrics.map((m) => (
-              <div key={m.key} className={`metric-item ${metric?.key === m.key ? 'on' : ''}`} onClick={() => go(`p/${p.id}/baselines/${bid}/${m.key}`)}>
+              <div key={m.key} className={`metric-item ${metric?.key === m.key ? 'on' : ''}`} onClick={() => go(`run/${id}/${m.key}`)}>
                 <span className={`rag-dot ${m.rag || 'grey'}`} title={m.rag} />
                 <span className="nm" title={m.name}>{m.name}</span>
                 {m.n_excluded > 0 && <span className="tag" title="Excluded points">−{m.n_excluded}</span>}
@@ -57,53 +37,30 @@ export default function BaselineDetail({ p, user, gt, reload, bid, metricKey, cr
             ))}
           </div>
         </div>
-        <div>{metric ? <MetricView key={metric.key} m={metric} b={b} editable={editable} onChange={update} />
-          : <Summary b={b} p={p} />}</div>
+        <div>{metric ? <MetricView key={metric.key} m={metric} b={b} editable onChange={setB} /> : <Summary b={b} />}</div>
       </div>
-
-      {dialog === 'submit' && <ReviewDialog title="Submit for approval" cta="Submit" placeholder="What should the approver look at? (optional)"
-        warn={res.summary.red > 0 && `${res.summary.red} metric(s) are red. Make sure flagged points have been reviewed.`}
-        onClose={() => setDialog(null)} onOk={(note) => act('submit', { note }, 'Submitted for approval')} />}
-      {dialog === 'approve' && <ReviewDialog title={`Approve ${b.label}`} cta="Approve baseline" placeholder="Approval note (optional)"
-        warn={'Approving locks this version and supersedes any baseline currently in force.'}
-        onClose={() => setDialog(null)} onOk={(note) => act('approve', { note }, 'Baseline approved')} />}
-      {dialog === 'return' && <ReviewDialog title="Return to draft" cta="Return to draft" placeholder="What needs to change?" required
-        onClose={() => setDialog(null)} onOk={(note) => act('return', { note }, 'Returned to draft')} />}
-      {dialog === 'settings' && <SettingsDialog b={b} onClose={() => setDialog(null)}
-        onSaved={(nb) => { update(nb); setDialog(null); toast('Recomputed with new settings') }} />}
-    </>
+      {renaming && <RenameDialog b={b} onClose={() => setRenaming(false)} onDone={(nb) => { setB(nb); setRenaming(false) }} />}
+    </div></div>
   )
 }
 
-function Workflow({ b }) {
-  const order = ['draft', 'submitted', 'approved']
-  const idx = b.status === 'superseded' ? 3 : order.indexOf(b.status)
-  const labels = ['Draft', 'In review', 'Approved']
+function RenameDialog({ b, onClose, onDone }) {
+  const [name, setName] = useState(b.name)
+  const toast = useToast()
   return (
-    <div className="card" style={{ padding: '12px 18px', marginBottom: 16 }}>
-      <div className="workflow row wrap">
-        {labels.map((l, i) => (
-          <React.Fragment key={l}>
-            {i > 0 && <span className="wf-line" />}
-            <span className={`wf-step ${i < idx || (b.status === 'approved' && i === 2) ? 'done' : i === idx ? 'on' : ''}`}>
-              <span className={`step ${i < idx || (b.status === 'approved' && i === 2) ? 'done' : i === idx ? 'on' : ''}`}>{i < idx || (b.status === 'approved' && i === 2) ? '✓' : i + 1}</span>{l}
-            </span>
-          </React.Fragment>
-        ))}
-        <span className="spacer" />
-        {b.status === 'superseded' && <Pill cls="grey">Superseded by a newer approved version</Pill>}
-        {b.status === 'draft' && <span className="muted" style={{ fontSize: 12.5 }}>Review flagged points, record assignable causes, then submit.</span>}
-        {b.status === 'submitted' && <span className="muted" style={{ fontSize: 12.5 }}>Locked while in review.</span>}
-        {b.status === 'approved' && <span className="muted" style={{ fontSize: 12.5 }}>In force for QPM. Locked.</span>}
-      </div>
-    </div>
+    <Modal title="Rename run" onClose={onClose} footer={<><button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+      <button className="btn btn-primary" disabled={!name.trim()} onClick={async () => {
+        try { onDone(await api.patch(`/runs/${b.id}`, { name })) } catch (e) { toast(e.message, 'err') }
+      }}>Save</button></>}>
+      <input className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+    </Modal>
   )
 }
 
 function ExportMenu({ b }) {
   const [open, setOpen] = useState(false)
   const toast = useToast()
-  const dl = async (f) => { setOpen(false); toast(`Preparing ${f.toUpperCase()}…`); try { await api.download(`/baselines/${b.id}/export/${f}`, `baseline.${f}`) } catch (e) { toast(e.message, 'err') } }
+  const dl = async (f) => { setOpen(false); toast(`Preparing ${f.toUpperCase()}…`); try { await api.download(`/runs/${b.id}/export/${f}`, `baseline.${f}`) } catch (e) { toast(e.message, 'err') } }
   return (
     <div style={{ position: 'relative' }}>
       <button className="btn btn-ghost" onClick={() => setOpen(!open)} aria-expanded={open}>Export ▾</button>
@@ -116,7 +73,7 @@ function ExportMenu({ b }) {
   )
 }
 
-function Summary({ b, p }) {
+function Summary({ b }) {
   const s = b.results.summary
   return (
     <>
@@ -132,7 +89,7 @@ function Summary({ b, p }) {
           <tbody>{b.results.metrics.map((m) => m.error ? (
             <tr key={m.key}><td>{m.name}</td><td colSpan="8" className="muted">{m.error}</td><td><RagPill rag="red" /></td></tr>
           ) : (
-            <tr key={m.key} className="click" onClick={() => go(`p/${p.id}/baselines/${b.id}/${m.key}`)}>
+            <tr key={m.key} className="click" onClick={() => go(`run/${b.id}/${m.key}`)}>
               <td style={{ fontWeight: 500 }}>{m.name}<div className="faint" style={{ fontSize: 11.5 }}>{m.unit}</div></td>
               <td className="r">{m.n_used}{m.n_excluded > 0 && <span className="faint">/{m.n_total}</span>}</td>
               <td className="r">{fmt(m.stats.mean)}</td><td className="r">{fmt(m.stats.median)}</td>
@@ -249,7 +206,7 @@ function PointDialog({ m, b, i, editable, onClose, onChange }) {
   const toast = useToast()
   const save = async (r) => {
     setBusy(true)
-    try { onChange(await api.patch(`/baselines/${b.id}/exclusions`, { metric: m.key, row: pt.row, reason: r })); toast(r ? 'Point excluded, baseline recomputed' : 'Point re-included') }
+    try { onChange(await api.patch(`/runs/${b.id}/exclusions`, { metric: m.key, row: pt.row, reason: r })); toast(r ? 'Point excluded, baseline recomputed' : 'Point re-included') }
     catch (e) { toast(e.message, 'err') } finally { setBusy(false) }
   }
   return (
@@ -274,45 +231,6 @@ function PointDialog({ m, b, i, editable, onClose, onChange }) {
             <span className="hint">Recorded with your name and date, shown in reports and the audit trail. A statistical flag alone is not a cause.</span></div>
           <div className="row wrap">{CAUSES.map((c) => <button key={c} className="tag" style={{ border: 0, cursor: 'pointer' }} onClick={() => setReason(c)}>{c}</button>)}</div>
         </>}
-      </div>
-    </Modal>
-  )
-}
-
-function ReviewDialog({ title, cta, placeholder, warn, required, onClose, onOk }) {
-  const [note, setNote] = useState('')
-  return (
-    <Modal title={title} onClose={onClose} footer={<><button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-      <button className="btn btn-primary" disabled={required && !note.trim()} onClick={() => onOk(note || null)}>{cta}</button></>}>
-      <div className="stack">
-        {warn && <div className="banner amber">{warn}</div>}
-        <textarea className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder={placeholder} autoFocus />
-      </div>
-    </Modal>
-  )
-}
-
-function SettingsDialog({ b, onClose, onSaved }) {
-  const [s, setS] = useState(b.settings)
-  const [label, setLabel] = useState(b.label)
-  const [busy, setBusy] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
-  const toast = useToast()
-  const save = async () => {
-    setBusy(true)
-    try { onSaved(await api.patch(`/baselines/${b.id}/settings`, { settings: s, label })) } catch (e) { toast(e.message, 'err') } finally { setBusy(false) }
-  }
-  return (
-    <Modal title="Baseline settings" wide onClose={onClose} footer={<>
-      <button className="btn btn-ghost" disabled={refreshing} onClick={async () => {
-        setRefreshing(true)
-        try { onSaved(await api.post(`/baselines/${b.id}/refresh-metrics`)) } catch (e) { toast(e.message, 'err') } finally { setRefreshing(false) }
-      }}>Pull latest metric definitions</button>
-      <span className="spacer" /><button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-      <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? 'Recomputing…' : 'Save & recompute'}</button></>}>
-      <div className="stack">
-        <div className="field"><label>Label</label><input className="input" value={label} onChange={(e) => setLabel(e.target.value)} /></div>
-        <SettingsForm s={s} set={(k, v) => setS({ ...s, [k]: v })} />
       </div>
     </Modal>
   )

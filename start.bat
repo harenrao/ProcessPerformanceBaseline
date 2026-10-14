@@ -9,7 +9,7 @@ if not exist .venv (
 )
 echo.
 echo   GT Process Performance Baseline is starting.
-echo   Open http://localhost:8000 in your browser.  Sign in as gt.diksha / gt-2026
+echo   Open http://localhost:8000 in your browser. First time: create your account.
 echo   Press Ctrl+C to stop.
 echo.
 cd backend

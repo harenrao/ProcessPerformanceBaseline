@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
-import { RAG_LABEL, STATUS } from '../helpers.js'
+import { RAG_LABEL } from '../helpers.js'
 
 const ToastCtx = createContext(() => {})
 export const useToast = () => useContext(ToastCtx)
@@ -59,7 +59,6 @@ export const Pill = ({ cls = 'grey', dot, children, title }) => (
   <span className={`pill ${cls}`} title={title}>{dot && <span className="dot" />}{children}</span>
 )
 export const RagPill = ({ rag }) => <Pill cls={rag || 'grey'} dot>{RAG_LABEL[rag] || '—'}</Pill>
-export const StatusPill = ({ status }) => { const s = STATUS[status] || STATUS.draft; return <Pill cls={s.cls}>{s.label}</Pill> }
 
 export function RagBar({ s }) {
   if (!s || !s.metrics) return <div className="ragbar" />

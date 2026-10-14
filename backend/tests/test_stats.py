@@ -39,18 +39,6 @@ def test_grubbs_and_iqr_flag_extremes():
     assert 30 in st.iqr_outliers(x)
 
 
-def test_ols_recovers_coefficients():
-    rng = np.random.default_rng(3)
-    X = rng.uniform(0, 10, (50, 2))
-    y = 2 + 3 * X[:, 0] - 1 * X[:, 1] + rng.normal(0, 0.1, 50)
-    m = st.ols(y, X, ["a", "b"])
-    coefs = [c["coef"] for c in m["coefficients"]]
-    assert np.allclose(coefs, [2, 3, -1], atol=0.1)
-    assert m["r2"] > 0.99
-    pr = st.ols_predict(m, [5, 5])
-    assert abs(pr["yhat"] - 12) < 0.2
-
-
 def test_median_ci_contains_median():
     x = np.arange(1, 41, dtype=float)
     lo, hi = st.median_ci(x)

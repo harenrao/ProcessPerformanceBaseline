@@ -7,24 +7,21 @@ from fastapi.staticfiles import StaticFiles
 
 from . import db
 from .config import CORS_ORIGINS, FRONTEND_DIST
-from .routers import auth, baselines, projects
-from .seed import seed
+from .routers import auth, runs
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     db.init()
-    seed()
     yield
 
 
-app = FastAPI(title="GT Process Performance Baseline", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Process Performance Baseline", version="2.1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 
 app.include_router(auth.router)
-app.include_router(projects.router)
-app.include_router(baselines.router)
+app.include_router(runs.router)
 
 
 @app.get("/api/health")

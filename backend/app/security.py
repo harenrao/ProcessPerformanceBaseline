@@ -14,10 +14,6 @@ from .config import ACCESS_TOKEN_TTL_HOURS, SECRET_KEY
 
 oauth2 = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
-GT_ROLES = {"GT Admin", "GT Director", "GT Consultant"}
-APPROVER_ROLES = {"GT Admin", "GT Director"}
-USER_ADMIN_ROLES = {"GT Admin", "GT Director"}
-
 
 def hash_password(p: str) -> str:
     return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
@@ -36,7 +32,7 @@ def make_token(user_id: int) -> str:
 
 
 def public_user(u: dict) -> dict:
-    return {k: u.get(k) for k in ("id", "username", "name", "role", "org_id", "email")}
+    return {k: u.get(k) for k in ("id", "username", "name", "role")}
 
 
 def current_user(token: str = Depends(oauth2)) -> dict:
@@ -48,23 +44,6 @@ def current_user(token: str = Depends(oauth2)) -> dict:
     if not u:
         raise HTTPException(401, "Unknown user")
     return public_user(u)
-
-
-def is_gt(u: dict) -> bool:
-    return u["role"] in GT_ROLES
-
-
-def require_gt(u: dict = Depends(current_user)) -> dict:
-    if not is_gt(u):
-        raise HTTPException(403, "GT staff only")
-    return u
-
-
-def project_for(project_id: int, u: dict) -> dict:
-    p = db.one("SELECT * FROM projects WHERE id = ?", project_id)
-    if not p or (not is_gt(u) and p["org_id"] != u["org_id"]):
-        raise HTTPException(404, "Project not found")
-    return p
 
 
 _attempts: dict[str, deque] = defaultdict(deque)

@@ -39,10 +39,10 @@ def phase_label(col: str) -> str:
 
 
 def infer_mapping(df: pd.DataFrame) -> dict:
-    """Guess id / size / effort / defect / grouping columns from header names and dtypes."""
+    """Guess id / size / effort / defect / date columns from header names and dtypes."""
     cols = list(df.columns)
     numeric = {c for c in cols if pd.to_numeric(df[c], errors="coerce").notna().mean() > 0.8}
-    m: dict[str, Any] = {"id": None, "size": None, "effort": [], "defect": [], "group": [], "date": None}
+    m: dict[str, Any] = {"id": None, "size": None, "effort": [], "defect": [], "date": None}
 
     for c in cols:
         n = _norm(c)
@@ -57,18 +57,7 @@ def infer_mapping(df: pd.DataFrame) -> dict:
         elif c in numeric and re.search(r"\b(efforts?|md|hours?|hrs|person)\b", n):
             m["effort"].append(c)
 
-    for c in cols:
-        if c in numeric or c == m["id"] or c == m["date"]:
-            continue
-        nun = df[c].nunique(dropna=True)
-        if 1 < nun <= max(8, len(df) // 4):
-            m["group"].append(c)
     return m
-
-
-def id_prefix(series: pd.Series) -> pd.Series:
-    """'LISC0300028' -> 'LISC'. Often the line of business / application, a natural stratum."""
-    return series.astype(str).str.extract(r"^([A-Za-z]+)", expand=False).fillna("—")
 
 
 def slug(s: str) -> str:

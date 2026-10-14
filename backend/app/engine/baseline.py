@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from . import stats as st
-from .ingest import compute_metric, id_prefix
+from .ingest import compute_metric
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "outlier_method": "iqr",      # iqr | grubbs | imr | none  (flags only)
@@ -230,17 +230,3 @@ def run_baseline(df: pd.DataFrame, mapping: dict, metrics: list[dict], settings:
         "rows": len(df),
     }
     return {"settings": s, "summary": summary, "metrics": results}
-
-
-def metric_frame(df: pd.DataFrame, mapping: dict, metrics: list[dict]) -> pd.DataFrame:
-    """Row-level table of all metric values plus grouping columns (for PPMs and stratification)."""
-    frame = ordered_frame(df, mapping)
-    out = pd.DataFrame({"__row": frame["__row"].to_numpy()}, index=frame.index)
-    for md in metrics:
-        out[md["key"]] = compute_metric(frame, md).to_numpy()
-    for g in mapping.get("group", []):
-        if g in frame:
-            out["grp:" + g] = frame[g].astype(str).to_numpy()
-    if mapping.get("id"):
-        out["grp:ID prefix"] = id_prefix(frame[mapping["id"]]).to_numpy()
-    return out

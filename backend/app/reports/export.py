@@ -127,7 +127,7 @@ def _png(fig) -> bytes:
 
 
 # ------------------------------------------------------------------- excel --
-def build_xlsx(p: dict, b: dict) -> bytes:
+def build_xlsx(b: dict) -> bytes:
     wb = Workbook()
     head = Font(bold=True, color="FFFFFF", size=10)
     headfill = PatternFill("solid", fgColor=BRAND)
@@ -136,9 +136,9 @@ def build_xlsx(p: dict, b: dict) -> bytes:
 
     ws = wb.active
     ws.title = "Baseline"
-    ws["A1"] = f"Process Performance Baseline — {p['name']}"
+    ws["A1"] = f"Process Performance Baseline — {b['name']}"
     ws["A1"].font = Font(bold=True, size=14, color=BRAND)
-    ws["A2"] = f"{p['client']} · {b['label']} (v{b['version']}, {b['status']}) · generated {datetime.now():%d %b %Y}"
+    ws["A2"] = f"Source {b['filename']} · {b['n_rows']} rows · generated {datetime.now():%d %b %Y}"
     ws["A2"].font = Font(color=MUTED)
     cols = ["Metric", "Unit", "n", "Excluded", "Mean", "Median", "Std dev", "LCL", "CL", "UCL", "Limit method",
             "Best fit", "AD p-value", "Stable", "RAG", "Mean 95% CI", "Goal", "Cpk/Ppk"]
@@ -230,7 +230,7 @@ def _shade(cell, hex_color: str) -> None:
     tcPr.append(shd)
 
 
-def build_docx(p: dict, b: dict) -> bytes:
+def build_docx(b: dict) -> bytes:
     res = b["results"]
     doc = Document()
     st = doc.styles["Normal"]
@@ -241,13 +241,10 @@ def build_docx(p: dict, b: dict) -> bytes:
     t = doc.add_paragraph()
     r = t.add_run("GRANT THORNTON · PROCESS PERFORMANCE BASELINE")
     r.font.size, r.font.bold, r.font.color.rgb = Pt(9), True, RGBColor.from_string(FAINT)
-    doc.add_heading(p["name"], 0)
+    doc.add_heading(b["name"], 0)
     meta = doc.add_paragraph()
-    meta.add_run(f"{p['client']} · {b['label']} · version {b['version']} · status {b['status'].upper()}\n").bold = True
-    meta.add_run(f"Generated {datetime.now():%d %B %Y}. Period: {p.get('period') or '—'}. "
-                 f"Lifecycle: {p.get('lifecycle') or '—'}.")
-    if b.get("approved_at"):
-        doc.add_paragraph(f"Approved by {b.get('approved_by_name')} on {b['approved_at'][:10]}.")
+    meta.add_run(f"Source data: {b['filename']} ({b['n_rows']} rows)\n").bold = True
+    meta.add_run(f"Prepared by {b.get('created_by_name') or '—'}. Generated {datetime.now():%d %B %Y}.")
 
     doc.add_heading("Executive summary", 1)
     s = res["summary"]
@@ -317,16 +314,6 @@ def build_docx(p: dict, b: dict) -> bytes:
             for pt in ex:
                 doc.add_paragraph(f"{pt['id']} ({fmt(pt['value'])}): {pt['reason']}", style="List Bullet")
 
-    doc.add_page_break()
-    doc.add_heading("Approval", 1)
-    at = doc.add_table(rows=3, cols=3)
-    at.style = "Table Grid"
-    for i, h in enumerate(["Role", "Name", "Date"]):
-        at.rows[0].cells[i].text = h
-    at.rows[1].cells[0].text, at.rows[1].cells[1].text = "Prepared by", b.get("created_by_name") or ""
-    at.rows[1].cells[2].text = (b.get("created_at") or "")[:10]
-    at.rows[2].cells[0].text, at.rows[2].cells[1].text = "Approved by", b.get("approved_by_name") or ""
-    at.rows[2].cells[2].text = (b.get("approved_at") or "")[:10]
     for par in doc.paragraphs[:1]:
         par.alignment = WD_ALIGN_PARAGRAPH.LEFT
     buf = io.BytesIO()
@@ -354,7 +341,7 @@ def _bar(slide):
     s.line.fill.background()
 
 
-def build_pptx(p: dict, b: dict) -> bytes:
+def build_pptx(b: dict) -> bytes:
     res = b["results"]
     prs = Presentation()
     prs.slide_width, prs.slide_height = PI(13.333), PI(7.5)
@@ -363,8 +350,8 @@ def build_pptx(p: dict, b: dict) -> bytes:
     s = prs.slides.add_slide(blank)
     _bar(s)
     _tx(s, "PROCESS PERFORMANCE BASELINE", 0.8, 2.3, 11, 0.4, 12, True, FAINT)
-    _tx(s, p["name"], 0.8, 2.7, 11, 1, 36, True, BRAND)
-    _tx(s, f"{p['client']} · {b['label']} · v{b['version']} ({b['status']})", 0.8, 3.8, 11, 0.5, 16, False, MUTED)
+    _tx(s, b["name"], 0.8, 2.7, 11, 1, 36, True, BRAND)
+    _tx(s, f"Source {b['filename']} · {b['n_rows']} rows", 0.8, 3.8, 11, 0.5, 16, False, MUTED)
     _tx(s, f"Grant Thornton · {datetime.now():%B %Y}", 0.8, 6.6, 11, 0.4, 11, False, FAINT)
 
     s = prs.slides.add_slide(blank)
@@ -422,5 +409,5 @@ def build_pptx(p: dict, b: dict) -> bytes:
     return buf.getvalue()
 
 
-def build(fmt_: str, p: dict, b: dict) -> bytes:
-    return {"xlsx": build_xlsx, "docx": build_docx, "pptx": build_pptx}[fmt_](p, b)
+def build(fmt_: str, run: dict) -> bytes:
+    return {"xlsx": build_xlsx, "docx": build_docx, "pptx": build_pptx}[fmt_](run)

@@ -1,8 +1,8 @@
 # PPB Generator: assessment of v1 and what v2 changes
 
 This review covers the original Flask tool (`PPB-main.zip`: `app.py`, `baseline_analyzer.py`,
-`report_generator.py`, `index.html`, `main.js`). I ran its analyzer on the bundled
-`Baseline_data.xlsx` (43 change requests, 20 columns), so the findings below come from that run.
+`report_generator.py`, `index.html`, `main.js`). I ran its analyzer on the reference input
+workbook (43 change requests, 20 columns), so the findings below come from that run.
 
 ## Verdict
 
@@ -38,40 +38,30 @@ projects use for QPM. The look is also stock Bootstrap. Fixing it took a rebuild
 * There is no notion of a project, client, version or approval. Each run is a throwaway.
 * There is no way to see *why* a point was removed, or to undo the removal.
 
-## 4. What v2 delivers
+## 4. What the new version delivers
 
-| Area | v1 | v2 |
-|------|----|----|
-| Stack | Flask + jQuery/Bootstrap | FastAPI + SQLite, React (Vite), GT design tokens |
-| Access | None | JWT sign-in, GT Admin / Director / Consultant / Client roles, client org isolation, login rate limit |
-| Structure | Single page | Login → Projects → workspace: Overview, Data, Metrics, Baselines, Baseline detail, Stratification, Models (PPM), Compare, Audit; plus Users and Methodology |
-| Ingestion | Hard-coded columns | Header normalisation, auto-mapping (size, effort, defects, ID, date, grouping) that the user can edit, data-quality score and issues |
-| Metrics | 15 fixed ratios | Per-phase effort/size, total delivery rate, per-phase and total DD, DRE, plus **custom ratios** (Σ num ÷ Σ den × k), spec limits and goal (QPPO) |
-| Outliers | 3 auto-removal passes | IQR / Grubbs / I-MR **flag only**. Exclusion requires an **assignable cause**, stamped with name and date, and can be re-included. Optional capped auto-exclude |
-| Stability | I-MR, rule 1 only | I-MR in time order, Nelson/WE tests 1, 2, 3, 5, 6, log-scale charting for lognormal metrics |
-| Distribution | KS mislabelled as AD | Real Anderson-Darling: Minitab p-values for Normal/Lognormal, Stephens tables for Exponential/Weibull, AD statistic for Gamma |
-| Baseline | Mean/SD only | **LCL / CL / UCL** by distribution, 95% CI of mean and median, percentiles, Cpk/Ppk and % within spec, goal check, RAG per metric |
-| Analysis | — | Stratification (Kruskal-Wallis, ANOVA, Levene, with a recommendation), PPM regression (coefficients, VIF, residual AD, Cook's distance, what-if with 95% PI), version comparison (Mann-Whitney, Welch, Levene) |
-| Governance | — | Versioned baselines, Draft → In review → Approved, segregation of duties (the submitter can't approve), approval supersedes the previous version, full audit trail with CSV export |
-| Reports | Plain Word/PPT/Excel | GT-styled Word (summary, method, per-metric charts, exclusions, approval block), PPT (summary + slide per metric), Excel (limits, data points with flags and causes, fits, method) |
-| Quality | No tests | 9 backend tests (stats checked against SciPy; API flow incl. org isolation and approvals) |
+The tool is now a focused PPB helper that a client installs and runs on their own machine.
 
-On the same sample, v2 baselines **20 metrics** with all 43 points kept by default. Every flagged
-point waits for an analyst to decide, instead of being removed automatically.
+| Area | Original | New |
+|------|----------|-----|
+| Flow | One long page, nothing saved | Sign in → Home (upload + past runs) → PPB result |
+| Accounts | None | Local accounts created on first launch; each user sees only their own runs |
+| Input | Hard-coded column names | Header normalisation and automatic detection of size, effort, defect and ID columns, a data-quality check before running, and a downloadable input template |
+| Metrics | Per-phase ratios only (5 silently missing) | Per-phase and total effort per size unit, per-phase and total defect density, defect removal efficiency |
+| Outliers | Three automatic removal passes | Flagged for review. A point is excluded only with a recorded reason, and can be re-included |
+| Stability | I-MR, rule 1 only | I-MR in time order with Nelson/WE tests 1, 2, 3, 5 and 6; log-scale charting for skewed metrics |
+| Distribution | KS mislabelled as AD | Real Anderson-Darling across Normal, Lognormal, Exponential, Weibull and Gamma |
+| Baseline | Mean/SD only | **Lower limit / centre line / upper limit** per metric, confidence intervals, percentiles, red/amber/green status |
+| Output | Plain Word/PPT/Excel | GT-styled Word, PowerPoint and Excel |
+| Charts | Static images | Interactive control chart and histogram |
+| Quality | No tests | Automated tests for the statistics and the upload → run → export flow |
 
-## 5. Recommended next enhancements (prioritised)
+## 5. Possible later additions
 
-**Next (high value, moderate effort)**
-1. **Project-level QPM tracking.** Projects post actuals against the approved org baseline (a control chart with org limits) and get alerts on signals. This closes the loop from OPP to QPM.
-2. **Monte Carlo QPPO probability.** Use the saved PPMs and the baseline distributions to estimate "probability of meeting the QPPO" at project planning and at each milestone.
-3. **Attribute charts for defect data.** u-charts / Laney U′ for defect density, where size varies a lot between items. This is more defensible than I-MR on ratios.
-4. **Transformations.** Box-Cox and Johnson, for metrics that fit no distribution.
-5. **Data connectors.** Jira / Azure DevOps / ServiceNow pulls, so nobody re-keys data, plus scheduled re-baselining with drift detection (the compare test run automatically).
+These are out of scope for now (PPB only), but are natural next steps:
 
-**Later**
-6. SSO (Entra ID), per-project membership, and e-signature on approval.
-7. Comment threads on points and metrics, plus notifications (submitted, approved, returned).
-8. A metric library per CMMI model (DEV / SVC), with standard operational definitions.
-9. An assistant (the GT platform chat pattern) that explains a chart, drafts assignable-cause narratives and summarises a version for the approver.
-10. Report export from the GT PowerPoint master and PDF, plus a client-facing read-only dashboard.
-11. Postgres, a background job queue for large files, and CI that runs the test suite.
+1. Control charts built for defect counts (u-chart / Laney U′) for defect density, where size varies a lot.
+2. Box-Cox / Johnson transformations for metrics that fit no distribution.
+3. Comparing two runs to show whether performance shifted.
+4. Grouping the data (by technology or application) to check whether it needs separate baselines.
+5. Process performance models (regression) built on the baseline.
