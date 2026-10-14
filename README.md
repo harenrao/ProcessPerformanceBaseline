@@ -15,7 +15,7 @@ tick "Add Python to PATH").
 
 1. Unzip the tool into a folder.
 2. Start it:
-   * **Windows:** double-click `start.bat`
+   * **Windows:** double-click `start.bat` (step-by-step guide: [`docs/WINDOWS_SETUP.md`](docs/WINDOWS_SETUP.md))
    * **Mac / Linux:** run `./start.sh` in a terminal
 3. Open **http://localhost:8000**. The first time, create your account.
 
