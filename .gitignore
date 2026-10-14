@@ -4,5 +4,4 @@ __pycache__/
 .pytest_cache/
 backend/ppb.db
 node_modules/
-frontend/dist/
 .DS_Store

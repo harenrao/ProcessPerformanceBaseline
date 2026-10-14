@@ -9,7 +9,19 @@ performance models and export reports in GT style.
 It replaces the earlier Flask PPB generator. [`docs/ASSESSMENT.md`](docs/ASSESSMENT.md) explains
 what was wrong with v1, what changed, and the recommended roadmap.
 
-## Run it
+## Quick start (no developer tools needed)
+
+You only need **Python 3.10 or newer** ([python.org](https://www.python.org/downloads/); on Windows tick "Add Python to PATH").
+
+1. Download this branch: **Code → Download ZIP** on GitHub, then unzip it.
+2. Start it:
+   * **Windows:** double-click `start.bat`
+   * **Mac / Linux:** run `./start.sh` in a terminal
+3. Open **http://localhost:8000** and sign in as `gt.diksha` / `gt-2026`.
+
+The first start installs packages (2–3 minutes). Keep the window open while you use the app.
+
+## Run it (development)
 
 ```bash
 # backend (Python 3.11+)
@@ -21,8 +33,8 @@ cd backend && uvicorn app.main:app --reload --port 8000
 cd frontend && npm install && npm run dev      # http://localhost:5173
 ```
 
-To run everything as a single process, run `npm run build` in `frontend/`. FastAPI then serves
-`frontend/dist` at http://localhost:8000.
+The built UI in `frontend/dist` is committed, so FastAPI also serves the full app at
+http://localhost:8000 without Node. Run `npm run build` after changing the frontend.
 
 On first start the app seeds demo users and three projects (two of them with the sample dataset). To
 reset, delete `backend/ppb.db`.
