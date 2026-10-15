@@ -1,5 +1,7 @@
 # Process Performance Baseline (PPB) helper
 
+> **New here? Start with [QUICK_START.md](QUICK_START.md)**: install, open and use the app in 5 steps.
+
 A small tool that runs on your own computer. Upload your project data (Excel or CSV) and it
 generates a process performance baseline for each productivity and quality metric. For every
 metric you get lower limit / centre line / upper limit, a stability check, the distribution fit and
